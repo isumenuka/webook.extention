@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "WeBook",
+  "version": "8.2.0",
+  "description": "Automatically organizes bookmarks into smart folders.",
+  "permissions": [
+    "bookmarks",
+    "storage",
+    "notifications",
+    "contextMenus",
+    "alarms",
+    "activeTab",
+    "tabs",
+    "tabGroups",
+    "favicon"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
+  },
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  }
+}
