@@ -1,5 +1,5 @@
-# <img src="icon.png" width="32" height="32" align="center"> WeBook — Smart Bookmark Manager (v6.0.0)
+# <img src="icon.png" width="32" height="32" align="center"> WeBook — Smart Bookmark Manager (v7.0.0)
 
-- **AI Auto-Categorize**: Classify folders automatically with AI.
-- **Duplicate & Broken Link Checker**: Keeps bookmarks tidy.
-- **HTML Import/Export**: Netscape bookmark compatibility.
+- **Tab Groups**: Save and restore named groups of Chrome tabs.
+- **JSON backups**: Back up tab details, tags, and structure.
+- **Tag blocklist**: Filters out 80+ generic keywords.
