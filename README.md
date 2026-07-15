@@ -8,6 +8,9 @@
 
 WeBook automatically organizes your bookmarks into smart folders using AI, enriches them with specific tags, detects duplicates, saves Chrome tab groups, and is optimized for simple self-hosting.
 
+> [!IMPORTANT]
+> **Releases in this repository are only for self-hosting.** If you do not wish to host your own server, please install the extension directly from the [Chrome Web Store](https://chromewebstore.google.com/detail/webook/ggikgoohejhgihbfkehpmacbmlhnmljp).
+
 ---
 
 ## 🎥 Demo Video
