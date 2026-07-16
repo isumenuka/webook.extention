@@ -1,6 +1,6 @@
 # <img src="icon.png" width="32" height="32" align="center"> WeBook — Smart Bookmark Manager
 
-> **v8.2.0** · Chrome Extension · AI-Powered Bookmark Organizer with Tab Groups
+> **v9.0.0** · Chrome Extension · AI-Powered Bookmark Organizer with Tab Groups
 
 [![Chrome Web Store](https://img.shields.io/badge/Chrome_Web_Store-Add_to_Chrome-black?style=for-the-badge&logo=googlechrome&logoColor=a3e635)](https://chromewebstore.google.com/detail/webook/ggikgoohejhgihbfkehpmacbmlhnmljp)
 
@@ -191,6 +191,15 @@ Just bookmark any page in Chrome — WeBook auto-organizes it in the background 
 ---
 
 ## 🔄 Changelog
+
+### v9.0.0
+- ✅ **Resumable Background Tasks** — Implemented auto-resume capabilities for Bulk Organizer and Broken Link Checker. Task states (pending queues, success/error counts, processed items) are stored persistently in local storage and automatically resumed on browser startup or extension updates.
+- ✅ **Manual "Analyze Bookmarks" Indexing** — Adds an onboarding indexing card on the Search tab for first-time users. Indexes all existing bookmarks using fast fallback tags and kicks off a concurrent background scraper for webpage metadata.
+- ✅ **Progressive UI Progress Bar** — Displays real-time progress percentages and bookmark counts during initial index analysis.
+- ✅ **JSON Import & Bulk Organize Bypass** — Automatically marks indexing as done after JSON imports or library organizations in the Activity tab to allow immediate search access.
+- ✅ **Relevance Scoring & Domain Grouping** — Search results are scored based on query matches (Exact Title, Substring, URL, Tags) and grouped under domain headers.
+- ✅ **Recency & Click Frequency Boosting** — Popular clicked bookmarks and recently added bookmarks receive a search scoring boost.
+- ✅ **15-Tag Limit Support & Clean Activity Tags** — Expands tag indexing capability to 15 (up from 5) for background scraping, folder classification, and backups, while displaying only the top 3 visual tags per bookmark in the activity list.
 
 ### v8.2.0
 - ✅ **Custom Context Menus & Inline Editing** — Adds right-click options for search results (Open Incognito, Copy URL, Edit Bookmark, Delete Bookmark) and replaces double-click gestures with menu-driven inline editing.
