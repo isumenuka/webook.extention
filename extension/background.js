@@ -2,20 +2,9 @@
 // Features: Auto-organize, Metadata fetch, Duplicate detection, Tags,
 //           Context menu, Weekly digest, Broken link checker, Folder merge
 
-// ── Proxy URL — loaded dynamically from storage ──
-let PROXY_URL = 'http://localhost:3000';
-
-chrome.storage.local.get({ proxyUrl: 'http://localhost:3000' }, (data) => {
-  PROXY_URL = data.proxyUrl;
-  console.log('[WeBook] Initialized Proxy URL:', PROXY_URL);
-});
-
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes.proxyUrl) {
-    PROXY_URL = changes.proxyUrl.newValue;
-    console.log('[WeBook] Proxy URL changed to:', PROXY_URL);
-  }
-});
+// ── Replace this with your deployed Digital Ocean server URL ──
+// e.g. 'https://webook-proxy-xxxxx.ondigitalocean.app'
+const PROXY_URL = 'https://webook-proxy-rfdpf.ondigitalocean.app';
 
 // ── Developer Helper: Clear local classification cache on reload to force server classification ──
 chrome.storage.local.remove('webookCache', () => {
@@ -88,10 +77,10 @@ function enrichTags(existingTags, title, url, folderName) {
 
   const enriched = new Set();
 
-  // 1. AI-generated tags (most specific — keep up to 8)
+  // 1. AI-generated tags (most specific — keep up to 15)
   if (Array.isArray(existingTags)) {
     for (const t of existingTags) {
-      if (enriched.size >= 8) break;
+      if (enriched.size >= 15) break;
       const clean = t.toLowerCase().trim().replace(/[^a-z0-9-]/g, '');
       if (clean.length >= 2 && !STOP_WORDS.has(clean)) enriched.add(clean);
     }
@@ -102,7 +91,7 @@ function enrichTags(existingTags, title, url, folderName) {
     const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
     const brand = host.split('.')[0];
     if (brand && brand.length >= 3 && !['com','org','net','edu','gov'].includes(brand) && !STOP_WORDS.has(brand)) {
-      if (enriched.size < 8) enriched.add(brand);
+      if (enriched.size < 15) enriched.add(brand);
     }
   } catch {}
 
@@ -111,25 +100,25 @@ function enrichTags(existingTags, title, url, folderName) {
     .toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
     .filter(w => w.length >= 4 && !STOP_WORDS.has(w));
   for (const w of folderWords) {
-    if (enriched.size >= 8) break;
+    if (enriched.size >= 15) break;
     enriched.add(w);
   }
 
-  // 4. Title words — used to reach minimum 5 tags
-  if (enriched.size < 5) {
+  // 4. Title words — used to reach minimum 15 tags
+  if (enriched.size < 15) {
     const titleWords = (title || '')
       .toLowerCase()
       .replace(/[^a-z0-9\s-]/g, ' ')
       .split(/[\s-]+/)
       .filter(w => w.length >= 4 && !STOP_WORDS.has(w));
     for (const w of titleWords) {
-      if (enriched.size >= 8) break;
+      if (enriched.size >= 15) break;
       enriched.add(w);
     }
   }
 
-  // Return 5–8 tags (best effort minimum 5)
-  return Array.from(enriched).slice(0, 8);
+  // Return up to 15 tags (best effort minimum 15)
+  return Array.from(enriched).slice(0, 15);
 }
 
 let isBulkOrganizeCancelled = false;
@@ -623,11 +612,12 @@ chrome.runtime.onInstalled.addListener((details) => {
     });
   } else {
     // On update/re-install, just clear any hung states and record/keep installedAt
-    chrome.storage.local.get({ installedAt: Date.now() }, (data) => {
-      chrome.storage.local.set({
-        installedAt: data.installedAt,
-        bulkOrganizeStatus: null,
-        linkCheckStatus: null
+    chrome.storage.local.get({ installedAt: Date.now(), bulkOrganizeState: null, linkCheckState: null }, (data) => {
+      const updates = { installedAt: data.installedAt };
+      if (!data.bulkOrganizeState) updates.bulkOrganizeStatus = null;
+      if (!data.linkCheckState) updates.linkCheckStatus = null;
+      chrome.storage.local.set(updates, () => {
+        resumeInterruptedTasks();
       });
     });
   }
@@ -650,10 +640,17 @@ chrome.runtime.onInstalled.addListener((details) => {
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  // Clear any hung task states from previous crash/close
-  chrome.storage.local.set({
-    bulkOrganizeStatus: null,
-    linkCheckStatus: null
+  chrome.storage.local.get(['bulkOrganizeState', 'linkCheckState'], (data) => {
+    const updates = {};
+    if (!data.bulkOrganizeState) updates.bulkOrganizeStatus = null;
+    if (!data.linkCheckState) updates.linkCheckStatus = null;
+    if (Object.keys(updates).length > 0) {
+      chrome.storage.local.set(updates, () => {
+        resumeInterruptedTasks();
+      });
+    } else {
+      resumeInterruptedTasks();
+    }
   });
 
   chrome.alarms.get('weekly-digest', (alarm) => {
@@ -806,8 +803,8 @@ chrome.bookmarks.onMoved.addListener(async (id, moveInfo) => {
     const bm = bmList[0];
     if (!bm.url) return;
 
-    const settings = await new Promise(r => chrome.storage.local.get({ licenseKey: 'selfhosted' }, r));
-    const licenseKey = settings.licenseKey || 'selfhosted';
+    const settings = await new Promise(r => chrome.storage.local.get({ licenseKey: '' }, r));
+    const licenseKey = settings.licenseKey || '';
     const rootFolderId = await getRealFolderId('1');
 
     const newPathSegments = await getFolderPath(moveInfo.parentId, rootFolderId);
@@ -1009,8 +1006,8 @@ async function processSingleBookmark(bookmark, settings) {
 // ─────────────────────────────────────────────────────────────────────────────
 async function classifyBookmark(title, url, existingFolders) {
   // Get license key from storage
-  const settings = await new Promise(r => chrome.storage.local.get({ licenseKey: 'selfhosted' }, r));
-  const licenseKey = settings.licenseKey || 'selfhosted';
+  const settings = await new Promise(r => chrome.storage.local.get({ licenseKey: '' }, r));
+  const licenseKey = settings.licenseKey || '';
 
   try {
     // #11 — Use fetchWithRetry with 1 retry and 28s timeout
@@ -1109,8 +1106,8 @@ async function checkBrokenLinks() {
   isLinkCheckCancelled = false;
   updateLinkCheckStatus({ status: 'scanning', checked: 0, total, dead: [] });
 
-  const settings = await new Promise(r => chrome.storage.local.get({ licenseKey: 'selfhosted' }, r));
-  const licenseKey = settings.licenseKey || 'selfhosted';
+  const settings = await new Promise(r => chrome.storage.local.get({ licenseKey: '' }, r));
+  const licenseKey = settings.licenseKey || '';
 
   // Group bookmarks by unique URL
   const urlMap = new Map();
@@ -1184,12 +1181,25 @@ async function checkBrokenLinks() {
           console.error('[WeBook] Aborting link check due to consecutive API/network failures.');
           isLinkCheckCancelled = true;
           updateLinkCheckStatus({ status: 'error', checked, total, dead, error: 'Multiple network/API failures. Please verify connection.' });
+          chrome.storage.local.remove('linkCheckState');
           return;
         }
       }
 
       checked += associated.length;
       updateLinkCheckStatus({ status: 'scanning', checked: Math.min(checked, total), total, dead });
+
+      // Save state for resumability
+      chrome.storage.local.set({
+        linkCheckState: {
+          status: 'scanning',
+          checked: Math.min(checked, total),
+          total,
+          dead,
+          queue,
+          urlMapArray: Array.from(urlMap.entries())
+        }
+      });
     }
   }
 
@@ -1201,6 +1211,7 @@ async function checkBrokenLinks() {
 
   if (!isLinkCheckCancelled && checked >= total) {
     updateLinkCheckStatus({ status: 'done', checked: total, total, dead });
+    chrome.storage.local.remove('linkCheckState');
   }
 }
 
@@ -1462,10 +1473,23 @@ async function organizeAllExistingBookmarks() {
           lastErrorMessage = err.message;
           await logActivity({ id: bm.id, title: bm.title || bm.url, url: bm.url, success: false, error: err.message, timestamp: Date.now() });
         }
+
+        // Save state for resumability
+        await new Promise(r => chrome.storage.local.set({
+          bulkOrganizeState: {
+            status: 'processing',
+            needsWorkIds: needsWork.map(b => b.id),
+            currentIndex: i + 1,
+            successCount,
+            errorCount,
+            lastErrorMessage
+          }
+        }, r));
       }
 
       if (isBulkOrganizeCancelled) {
         updateBulkStatus({ status: 'completed', current: successCount, total, progress: 100, details: 'Terminated by user' });
+        chrome.storage.local.remove('bulkOrganizeState');
         if (settings.showNotifications) {
           chrome.notifications.create('bulk-organize-end', {
             type: 'basic', iconUrl: 'icon.png', title: 'Bulk Organize Terminated',
@@ -1480,6 +1504,7 @@ async function organizeAllExistingBookmarks() {
         }
 
         updateBulkStatus({ status: 'completed', current: total, total, progress: 100 });
+        chrome.storage.local.remove('bulkOrganizeState');
 
         if (settings.showNotifications) {
           let messageText = `Successfully organized ${successCount} of ${total} bookmarks.`;
@@ -1505,4 +1530,201 @@ async function organizeAllExistingBookmarks() {
       await new Promise(r => chrome.storage.local.set({ systemActionInProgress: false }, r));
     }
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FEATURE: RESUMABLE TASKS (CRASH/CLOSURE RECOVERY)
+// ─────────────────────────────────────────────────────────────────────────────
+async function resumeInterruptedTasks() {
+  chrome.storage.local.get(['bulkOrganizeState', 'linkCheckState'], async (data) => {
+    if (data.bulkOrganizeState && data.bulkOrganizeState.status === 'processing') {
+      console.log('[WeBook] Resuming interrupted bulk organization task...');
+      resumeBulkOrganize(data.bulkOrganizeState);
+    }
+    if (data.linkCheckState && data.linkCheckState.status === 'scanning') {
+      console.log('[WeBook] Resuming interrupted link checker task...');
+      resumeLinkCheck(data.linkCheckState);
+    }
+  });
+}
+
+async function resumeBulkOrganize(state) {
+  const settings = await new Promise(r => chrome.storage.local.get({ rootFolder: '1', showNotifications: true, keepUserFolders: true, licenseKey: '' }, r));
+  
+  try {
+    await new Promise(r => chrome.storage.local.set({ systemActionInProgress: true }, r));
+    
+    const needsWork = [];
+    for (const id of state.needsWorkIds) {
+      try {
+        const results = await chrome.bookmarks.get(id);
+        if (results && results[0]) needsWork.push(results[0]);
+      } catch (e) {}
+    }
+
+    const total = needsWork.length;
+    let successCount = state.successCount || 0;
+    let errorCount = state.errorCount || 0;
+    let lastErrorMessage = state.lastErrorMessage || '';
+    const startIndex = state.currentIndex || 0;
+
+    isBulkOrganizeCancelled = false;
+    updateBulkStatus({ status: 'processing', current: startIndex, total, progress: Math.round((startIndex / total) * 100), details: 'Resuming...' });
+
+    for (let i = startIndex; i < total; i++) {
+      if (isBulkOrganizeCancelled) {
+        console.log('[WeBook] Resumed bulk organize task terminated by user.');
+        break;
+      }
+      const bm = needsWork[i];
+      updateBulkStatus({ status: 'processing', current: i + 1, total, progress: Math.round(((i + 1) / total) * 100), details: bm.title || bm.url });
+      
+      try {
+        const bulkSettings = { ...settings, showNotifications: false };
+        await processSingleBookmark(bm, bulkSettings);
+        successCount++;
+      } catch (err) {
+        errorCount++;
+        lastErrorMessage = err.message;
+        await logActivity({ id: bm.id, title: bm.title || bm.url, url: bm.url, success: false, error: err.message, timestamp: Date.now() });
+      }
+
+      // Save state for resumability
+      await new Promise(r => chrome.storage.local.set({
+        bulkOrganizeState: {
+          status: 'processing',
+          needsWorkIds: state.needsWorkIds,
+          currentIndex: i + 1,
+          successCount,
+          errorCount,
+          lastErrorMessage
+        }
+      }, r));
+    }
+
+    if (isBulkOrganizeCancelled) {
+      updateBulkStatus({ status: 'completed', current: successCount, total, progress: 100, details: 'Terminated by user' });
+      chrome.storage.local.remove('bulkOrganizeState');
+    } else {
+      if (!settings.keepUserFolders) {
+        updateBulkStatus({ status: 'processing', current: total, total, progress: 95, details: 'Cleaning up empty folders...' });
+        await removeEmptyFolders();
+      }
+      updateBulkStatus({ status: 'completed', current: total, total, progress: 100 });
+      chrome.storage.local.remove('bulkOrganizeState');
+
+      if (settings.showNotifications) {
+        let messageText = `Successfully organized ${successCount} of ${total} bookmarks.`;
+        if (errorCount > 0) {
+          messageText += ` (${errorCount} failed. Last error: ${lastErrorMessage})`;
+        }
+        chrome.notifications.create('bulk-organize-end', {
+          type: 'basic', iconUrl: 'icon.png', title: 'Bulk Organize Completed',
+          message: messageText, priority: 0
+        });
+      }
+    }
+  } catch (err) {
+    console.error('[WeBook] Error in resumed bulk organize:', err);
+    chrome.storage.local.remove('bulkOrganizeState');
+  } finally {
+    await new Promise(r => chrome.storage.local.set({ systemActionInProgress: false }, r));
+  }
+}
+
+async function resumeLinkCheck(state) {
+  const settings = await new Promise(r => chrome.storage.local.get({ licenseKey: '' }, r));
+  const licenseKey = settings.licenseKey || '';
+
+  const dead = state.dead || [];
+  let checked = state.checked || 0;
+  const total = state.total || 0;
+  const queue = state.queue || [];
+  const urlMap = new Map(state.urlMapArray || []);
+
+  isLinkCheckCancelled = false;
+  updateLinkCheckStatus({ status: 'scanning', checked, total, dead });
+
+  const poolSize = 5;
+  const activePromises = [];
+  let consecutiveErrors = 0;
+
+  async function worker() {
+    while (queue.length > 0 && !isLinkCheckCancelled) {
+      const url = queue.shift();
+      if (!url) continue;
+
+      const associated = urlMap.get(url) || [];
+      let isApiError = false;
+      let deadStatus = null;
+
+      try {
+        const res = await fetch(`${PROXY_URL}/api/check-link`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-license-key': licenseKey
+          },
+          body: JSON.stringify({ url })
+        });
+        if (res.ok) {
+          consecutiveErrors = 0;
+          const data = await res.json();
+          if (data.status === 'error' || data.status >= 400) {
+            deadStatus = data.status;
+          }
+        } else {
+          isApiError = true;
+          deadStatus = res.status;
+        }
+      } catch (e) {
+        isApiError = true;
+        deadStatus = 'timeout/error';
+      }
+
+      if (deadStatus !== null) {
+        associated.forEach(bm => {
+          dead.push({ id: bm.id, title: bm.title, url: bm.url, status: deadStatus });
+        });
+      }
+
+      if (isApiError) {
+        consecutiveErrors++;
+        if (consecutiveErrors >= 5) {
+          console.error('[WeBook] Aborting resumed link check due to consecutive failures.');
+          isLinkCheckCancelled = true;
+          updateLinkCheckStatus({ status: 'error', checked, total, dead, error: 'Multiple network/API failures. Please verify connection.' });
+          chrome.storage.local.remove('linkCheckState');
+          return;
+        }
+      }
+
+      checked += associated.length;
+      const statusData = { status: 'scanning', checked: Math.min(checked, total), total, dead };
+      updateLinkCheckStatus(statusData);
+
+      // Save state
+      chrome.storage.local.set({
+        linkCheckState: {
+          status: 'scanning',
+          checked: Math.min(checked, total),
+          total,
+          dead,
+          queue,
+          urlMapArray: Array.from(urlMap.entries())
+        }
+      });
+    }
+  }
+
+  for (let i = 0; i < Math.min(poolSize, queue.length); i++) {
+    activePromises.push(worker());
+  }
+
+  await Promise.all(activePromises);
+
+  if (!isLinkCheckCancelled && checked >= total) {
+    updateLinkCheckStatus({ status: 'done', checked: total, total, dead });
+    chrome.storage.local.remove('linkCheckState');
+  }
 }
