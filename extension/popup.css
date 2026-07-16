@@ -277,6 +277,13 @@ body {
   transform: translateY(0);
 }
 
+.search-result-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 4px;
+}
+
 /* Hint bar above search results */
 .search-results-hint {
   font-size: 8px;

@@ -96,15 +96,35 @@
 
       <!-- ── SEARCH TAB ── -->
       <section id="section-search" class="tab-content">
-        <div class="search-box-wrapper">
-          <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2.5" fill="none" class="search-icon"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input type="text" id="searchInput" class="search-input" placeholder="Search your bookmarks…" autocomplete="off">
+        <div id="analysisPromptContainer" class="action-card hidden" style="text-align: center; padding: 20px; border: 2px solid var(--border-dark); box-shadow: 3px 3px 0 var(--border-dark); background: #fff; margin-bottom: 12px;">
+          <div class="card-header" style="text-align: center; margin-bottom: 15px;">
+            <h3 style="font-size: 11px; text-transform: uppercase; font-weight: 800; color: var(--text-dark);">Prepare Search Index</h3>
+            <p style="font-size: 9.5px; color: var(--text-muted); margin-top: 4px;">Index your bookmarks to enable rich tag-based search.</p>
+          </div>
+          <button id="btnStartAnalysis" class="btn btn-primary" style="margin: 0 auto; display: flex; align-items: center; gap: 6px; font-weight: 800; font-size: 9px; text-transform: uppercase; padding: 6px 12px;">
+            <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2.5" fill="none"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+            <span>Analyze Bookmarks</span>
+          </button>
+          <div id="analysisProgress" class="hidden" style="margin-top: 15px;">
+            <div class="progress-bar-container"><div id="analysisProgressBar" class="progress-bar" style="width: 0%;"></div></div>
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 6px;">
+              <span id="analysisProgressText" style="font-size: 9px; font-weight: 800; text-transform: uppercase; color: var(--text-muted);">Analyzing...</span>
+              <span id="analysisProgressCount" style="font-weight: 800; background: #e5e7eb; padding: 1px 4px; font-size: 8px; border: 1px solid var(--border-dark);">0/0</span>
+            </div>
+          </div>
         </div>
-        <div id="searchResults" class="search-results">
-          <div class="no-logs">
-            <svg viewBox="0 0 24 24" width="28" height="28" stroke="currentColor" stroke-width="2" fill="none"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <p>Search your bookmarks</p>
-            <span>Type above to find any saved page.</span>
+
+        <div id="searchControls" class="">
+          <div class="search-box-wrapper">
+            <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2.5" fill="none" class="search-icon"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="searchInput" class="search-input" placeholder="Search your bookmarks…" autocomplete="off">
+          </div>
+          <div id="searchResults" class="search-results">
+            <div class="no-logs">
+              <svg viewBox="0 0 24 24" width="28" height="28" stroke="currentColor" stroke-width="2" fill="none"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <p>Search your bookmarks</p>
+              <span>Type above to find any saved page.</span>
+            </div>
           </div>
         </div>
       </section>
@@ -226,9 +246,9 @@
       <section id="section-settings" class="tab-content">
         <form id="settingsForm" class="settings-form">
           <div class="form-group">
-            <label for="proxyUrl">Server URL (Self-hosted Proxy)</label>
-            <input type="text" id="proxyUrl" class="text-input" placeholder="http://localhost:3000" autocomplete="off">
-            <div id="licenseStatus" class="license-status-label" style="display: none;"></div>
+            <label for="licenseKey">License Key</label>
+            <input type="password" id="licenseKey" class="text-input" placeholder="Enter license key (WB-...)" autocomplete="off">
+            <div id="licenseStatus" class="license-status-label"></div>
           </div>
 
           <div class="switch-group">

@@ -1,8 +1,8 @@
 // WeBook Popup v2 — All 10 Features
 
 document.addEventListener('DOMContentLoaded', () => {
-  // ── Proxy URL — loaded dynamically from storage ──
-  let PROXY_URL = 'http://localhost:3000';
+  // ── Proxy URL — must match what is set in background.js ──
+  const PROXY_URL = 'https://webook-proxy-rfdpf.ondigitalocean.app';
 
   // ── Favicon Support ──
   const FALLBACK_FAVICON = 'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#4b5563" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>');
@@ -27,7 +27,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const apiStatusText  = apiStatusBadge.querySelector('.status-text');
 
   let isApiConnected = false;
-  let isLicenseValid = true;
+  let isLicenseValid = false;
 
   function refreshStatusBadge(customText = null) {
     if (customText) {
@@ -38,6 +38,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!isApiConnected) {
       apiStatusBadge.className = 'api-status-badge disconnected';
       apiStatusText.textContent = 'Offline';
+    } else if (!isLicenseValid) {
+      apiStatusBadge.className = 'api-status-badge disconnected';
+      apiStatusText.textContent = 'Inactive';
     } else {
       apiStatusBadge.className = 'api-status-badge connected';
       apiStatusText.textContent = 'Active';
@@ -55,6 +58,97 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     refreshStatusBadge();
   }
+
+  // ── Search Index Analysis Elements ──
+  const analysisPromptContainer = document.getElementById('analysisPromptContainer');
+  const searchControls = document.getElementById('searchControls');
+  const btnStartAnalysis = document.getElementById('btnStartAnalysis');
+  const analysisProgress = document.getElementById('analysisProgress');
+  const analysisProgressBar = document.getElementById('analysisProgressBar');
+  const analysisProgressText = document.getElementById('analysisProgressText');
+  const analysisProgressCount = document.getElementById('analysisProgressCount');
+
+  function checkSearchIndexStatus() {
+    chrome.storage.local.get({ initialAnalysisDone: false }, (data) => {
+      if (data.initialAnalysisDone) {
+        analysisPromptContainer.classList.add('hidden');
+        searchControls.classList.remove('hidden');
+      } else {
+        analysisPromptContainer.classList.remove('hidden');
+        searchControls.classList.add('hidden');
+      }
+    });
+  }
+
+  btnStartAnalysis.addEventListener('click', () => {
+    btnStartAnalysis.disabled = true;
+    btnStartAnalysis.innerHTML = '<span>Analyzing...</span>';
+    analysisProgress.classList.remove('hidden');
+
+    getAllBookmarks((allBookmarks) => {
+      const total = allBookmarks.filter(b => b.url).length;
+      if (total === 0) {
+        chrome.storage.local.set({ initialAnalysisDone: true }, () => {
+          checkSearchIndexStatus();
+        });
+        return;
+      }
+
+      let processed = 0;
+      chrome.storage.local.get({ bookmarkTags: {} }, (storageData) => {
+        const bookmarkTags = storageData.bookmarkTags || {};
+        
+        allBookmarks.forEach(bm => {
+          if (bm.url && (!bookmarkTags[bm.id] || bookmarkTags[bm.id].length === 0)) {
+            bookmarkTags[bm.id] = getFallbackTags(bm.title, bm.url);
+          }
+        });
+
+        analysisProgressCount.textContent = `0/${total}`;
+        analysisProgressBar.style.width = '0%';
+
+        chrome.storage.local.set({ bookmarkTags }, () => {
+          const queue = allBookmarks.filter(bm => bm.url);
+          let index = 0;
+          const batchSize = 3;
+
+          async function processNextBatch() {
+            if (index >= queue.length) {
+              chrome.storage.local.set({ initialAnalysisDone: true }, () => {
+                checkSearchIndexStatus();
+              });
+              return;
+            }
+
+            const batch = queue.slice(index, index + batchSize);
+            index += batchSize;
+
+            const promises = batch.map(async (bm) => {
+              try {
+                const tags = await scrapeMetadataTags(bm.url, bm.title);
+                if (tags && tags.length > 0) {
+                  bookmarkTags[bm.id] = tags;
+                }
+              } catch (e) {}
+            });
+
+            await Promise.all(promises);
+            processed = Math.min(total, processed + batch.length);
+
+            chrome.storage.local.set({ bookmarkTags });
+
+            const pct = Math.round((processed / total) * 100);
+            analysisProgressBar.style.width = `${pct}%`;
+            analysisProgressCount.textContent = `${processed}/${total}`;
+
+            setTimeout(processNextBatch, 200);
+          }
+
+          processNextBatch();
+        });
+      });
+    });
+  });
 
   // Scoped helper to resolve the real root folder ID based on browser environment
   function getRealFolderId(settingsValue, callback) {
@@ -119,22 +213,34 @@ document.addEventListener('DOMContentLoaded', () => {
   const chkKeepUserFolders = document.getElementById('chkKeepUserFolders');
   const chkNotifications = document.getElementById('chkNotifications');
   const chkWeeklyDigest  = document.getElementById('chkWeeklyDigest');
-  const txtProxyUrl      = document.getElementById('proxyUrl');
+  const txtLicenseKey    = document.getElementById('licenseKey');
   const lblLicenseStatus = document.getElementById('licenseStatus');
   const statusMessage    = document.getElementById('statusMessage');
 
   function setLicenseState(valid) {
-    isLicenseValid = true;
+    isLicenseValid = valid;
     refreshStatusBadge();
     
+    // Disable/enable other tab buttons visually
     const tabLogs = document.getElementById('tab-logs');
     const tabSearch = document.getElementById('tab-search');
     const tabTools = document.getElementById('tab-tools');
     
     if (tabLogs && tabSearch && tabTools) {
-      tabLogs.style.opacity = '1';
-      tabSearch.style.opacity = '1';
-      tabTools.style.opacity = '1';
+      if (!valid) {
+        tabLogs.style.opacity = '0.5';
+        tabSearch.style.opacity = '0.5';
+        tabTools.style.opacity = '0.5';
+        // Force settings tab if currently on another tab
+        const activeTabBtn = document.querySelector('.tab-btn.active');
+        if (activeTabBtn && activeTabBtn.id !== 'tab-settings') {
+          switchTab('settings');
+        }
+      } else {
+        tabLogs.style.opacity = '1';
+        tabSearch.style.opacity = '1';
+        tabTools.style.opacity = '1';
+      }
     }
     
     updateButtonLocks();
@@ -150,7 +256,14 @@ document.addEventListener('DOMContentLoaded', () => {
       section.classList.toggle('active', key === name);
     });
     if (name === 'logs')   loadLogs();
-    if (name === 'search') document.getElementById('searchInput').focus();
+    if (name === 'search') {
+      checkSearchIndexStatus();
+      chrome.storage.local.get({ initialAnalysisDone: false }, (data) => {
+        if (data.initialAnalysisDone) {
+          document.getElementById('searchInput').focus();
+        }
+      });
+    }
     if (name === 'groups') loadGroupsTab();
 
     // Save tab selection to persist it
@@ -158,26 +271,92 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function checkLicenseKey(key) {
-    isLicenseValid = true;
-    setLicenseState(true);
+    if (!key) {
+      lblLicenseStatus.className = 'license-status-label';
+      lblLicenseStatus.textContent = '';
+      // Clear cached validity when key is removed
+      chrome.storage.local.set({ licenseValid: false });
+      setLicenseState(false);
+      return;
+    }
+    lblLicenseStatus.className = 'license-status-label';
+    lblLicenseStatus.style.display = 'block';
+    lblLicenseStatus.style.color = 'var(--text-muted)';
+    lblLicenseStatus.textContent = 'Checking key…';
+    try {
+      const response = await fetch(`${PROXY_URL}/api/validate-key`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key })
+      });
+      const data = await response.json();
+      if (data.valid) {
+        lblLicenseStatus.className = 'license-status-label valid';
+        lblLicenseStatus.textContent = 'Valid license key!';
+        // Cache the valid result so offline reopens still show Active
+        chrome.storage.local.set({ licenseValid: true });
+        setLicenseState(true);
+      } else {
+        lblLicenseStatus.className = 'license-status-label invalid';
+        lblLicenseStatus.textContent = 'Invalid license key';
+        chrome.storage.local.set({ licenseValid: false });
+        setLicenseState(false);
+      }
+    } catch {
+      // Server is offline — fall back to last cached validation result
+      chrome.storage.local.get({ licenseValid: false }, (cached) => {
+        if (cached.licenseValid) {
+          lblLicenseStatus.className = 'license-status-label valid';
+          lblLicenseStatus.textContent = 'Active (offline)';
+          setLicenseState(true);
+        } else {
+          lblLicenseStatus.className = 'license-status-label invalid';
+          lblLicenseStatus.textContent = 'Offline (Server Error)';
+          setLicenseState(false);
+        }
+      });
+    }
   }
 
+  let licenseTimer;
+  txtLicenseKey.addEventListener('input', () => {
+    clearTimeout(licenseTimer);
+    licenseTimer = setTimeout(() => checkLicenseKey(txtLicenseKey.value.trim()), 500);
+  });
+
   function loadSettings() {
-    chrome.storage.local.get({ autoOrganize: true, showNotifications: true, weeklyDigest: true, keepUserFolders: true, proxyUrl: 'http://localhost:3000', lastActiveTab: 'logs' }, (items) => {
+    chrome.storage.local.get({ autoOrganize: true, showNotifications: true, weeklyDigest: true, keepUserFolders: true, licenseKey: '', licenseValid: false, lastActiveTab: 'logs' }, (items) => {
       chkAutoOrganize.checked   = items.autoOrganize;
       chkNotifications.checked  = items.showNotifications;
       chkWeeklyDigest.checked   = items.weeklyDigest;
       chkKeepUserFolders.checked = items.keepUserFolders;
-      txtProxyUrl.value         = items.proxyUrl;
-
-      isLicenseValid = true;
-      setLicenseState(true);
+      txtLicenseKey.value       = items.licenseKey;
 
       const startTab = items.lastActiveTab || 'logs';
-      switchTab(startTab);
-
-      PROXY_URL = items.proxyUrl;
-      testApiKey();
+      if (items.licenseKey) {
+        // Apply cached license state immediately so UI doesn't flash Offline
+        if (items.licenseValid) {
+          setLicenseState(true);
+          switchTab(startTab);
+        }
+        // Then verify with server (and run testApiKey AFTER so it doesn't race)
+        checkLicenseKey(items.licenseKey).then(() => {
+          if (!items.licenseValid) {
+            // First open or previously invalid — navigate based on fresh result
+            if (isLicenseValid) {
+              switchTab(startTab);
+            } else {
+              switchTab('settings');
+            }
+          }
+          // Run ping after license check so refreshStatusBadge has final state
+          testApiKey();
+        });
+      } else {
+        setLicenseState(false);
+        switchTab('settings');
+        testApiKey();
+      }
     });
   }
 
@@ -187,10 +366,7 @@ document.addEventListener('DOMContentLoaded', () => {
       showNotifications: chkNotifications.checked,
       weeklyDigest:      chkWeeklyDigest.checked,
       keepUserFolders:   chkKeepUserFolders.checked,
-      proxyUrl:          txtProxyUrl.value.trim(),
-    }, () => {
-      PROXY_URL = txtProxyUrl.value.trim() || 'http://localhost:3000';
-      testApiKey();
+      licenseKey:        txtLicenseKey.value.trim(),
     });
   }
 
@@ -200,16 +376,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   settingsForm.addEventListener('submit', (e) => {
     e.preventDefault();
-    const newProxyUrl = txtProxyUrl.value.trim() || 'http://localhost:3000';
     chrome.storage.local.set({
       autoOrganize:      chkAutoOrganize.checked,
       showNotifications: chkNotifications.checked,
       weeklyDigest:      chkWeeklyDigest.checked,
       keepUserFolders:   chkKeepUserFolders.checked,
-      proxyUrl:          newProxyUrl,
+      licenseKey:        txtLicenseKey.value.trim(),
     }, () => {
-      PROXY_URL = newProxyUrl;
-      testApiKey().then(() => {
+      checkLicenseKey(txtLicenseKey.value.trim()).then(() => {
         showStatus('Settings saved!', 'success');
       });
     });
@@ -269,7 +443,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ? `<svg class="log-entry-icon success" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 8 8 12 12 16"/><line x1="16" y1="12" x2="8" y2="12"/></svg>`
         : `<svg class="log-entry-icon error" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
       const tagsHtml = (log.tags && log.tags.length > 0)
-        ? `<div class="log-entry-tags">${log.tags.map(t => `<span class="tag-pill">${escapeHtml(t)}</span>`).join('')}</div>`
+        ? `<div class="log-entry-tags">${log.tags.slice(0, 3).map(t => `<span class="tag-pill">${escapeHtml(t)}</span>`).join('')}</div>`
         : '';
       const details = log.success
         ? `<span class="log-entry-title">${escapeHtml(log.title)}</span>
@@ -344,52 +518,398 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  function doSearch(query) {
-    if (!query) {
-      searchResults.innerHTML = `<div class="no-logs">
-        <svg viewBox="0 0 24 24" width="28" height="28" stroke="currentColor" stroke-width="2" fill="none"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <p>Search your bookmarks</p><span>Type above to find any saved page.</span>
-      </div>`;
-      return;
-    }
-    chrome.bookmarks.search({ query }, (results) => {
-      // Filter out duplicate URLs to avoid showing the same page multiple times
-      const seenUrls = new Set();
-      const bookmarks = [];
-      for (const r of results) {
-        if (r.url) {
-          const normUrl = r.url.trim().toLowerCase();
-          if (!seenUrls.has(normUrl)) {
-            seenUrls.add(normUrl);
-            bookmarks.push(r);
-            if (bookmarks.length >= 30) {
-              break;
-            }
-          }
+  function getAllBookmarks(callback) {
+    chrome.bookmarks.getTree((tree) => {
+      const list = [];
+      function traverse(node) {
+        if (node.url) {
+          list.push(node);
+        }
+        if (node.children) {
+          node.children.forEach(traverse);
         }
       }
-      if (bookmarks.length === 0) {
-        searchResults.innerHTML = `<div class="no-logs"><p>No results for "${escapeHtml(query)}"</p></div>`;
-        return;
+      if (tree && tree.length > 0) {
+        traverse(tree[0]);
       }
-      searchResults.innerHTML = '';
+      callback(list);
+    });
+  }
 
-      // Hint bar: Ctrl+Click to open multiple without closing popup
-      const hint = document.createElement('div');
-      hint.className = 'search-results-hint';
-      hint.textContent = 'Ctrl + Click to open in background tab';
-      searchResults.appendChild(hint);
+  const STOP_WORDS = new Set([
+    'with','your','from','this','that','and','the','for','its','are','was',
+    'not','can','all','has','have','will','just','into','more','also','but',
+    'web','internet','online','website','site','page','pages','portal','domain',
+    'url','http','https','www','html','link','links','browse','browsing'
+  ]);
 
-      bookmarks.forEach(bm => {
+  async function scrapeMetadataTags(url, title) {
+    const tags = new Set();
+    
+    // Retrieve license key from storage for server authentication
+    const licenseKey = await new Promise(r => chrome.storage.local.get({ licenseKey: '' }, data => r(data.licenseKey || '')));
+    
+    try {
+      const res = await fetch(`${PROXY_URL}/api/scrape-metadata`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-license-key': licenseKey
+        },
+        body: JSON.stringify({ url })
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        
+        // Parse words from title
+        if (data.title) {
+          const titleWords = data.title.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/);
+          titleWords.forEach(w => {
+            if (w.length >= 4 && !STOP_WORDS.has(w)) tags.add(w);
+          });
+        }
+        
+        // Parse words from description
+        if (data.description) {
+          const descWords = data.description.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/);
+          descWords.forEach(w => {
+            if (w.length >= 4 && !STOP_WORDS.has(w)) tags.add(w);
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('[WeBook Scraper] Scrape failed for:', url, e.message);
+    }
+
+    // Combine with fallback tags to guarantee tags
+    const fallback = getFallbackTags(title, url);
+    fallback.forEach(t => tags.add(t));
+
+    return Array.from(tags).slice(0, 15);
+  }
+
+  function startBackgroundEnrichment(allBookmarks, bookmarkTags) {
+    const queue = allBookmarks.filter(bm => bm.url && (!bookmarkTags[bm.id] || bookmarkTags[bm.id].length <= 5));
+    if (queue.length === 0) return;
+
+    let index = 0;
+    const batchSize = 3;
+
+    async function processNextBatch() {
+      if (index >= queue.length) return;
+
+      const batch = queue.slice(index, index + batchSize);
+      index += batchSize;
+
+      const promises = batch.map(async (bm) => {
+        try {
+          const tags = await scrapeMetadataTags(bm.url, bm.title);
+          if (tags && tags.length > 0) {
+            bookmarkTags[bm.id] = tags;
+          }
+        } catch (e) {}
+      });
+
+      await Promise.all(promises);
+      chrome.storage.local.set({ bookmarkTags });
+
+      setTimeout(processNextBatch, 1000);
+    }
+
+    processNextBatch();
+  }
+
+  function getFallbackTags(title, url) {
+    const combined = `${title || ''} ${url || ''}`.toLowerCase();
+    const tags = new Set();
+    
+    // 1. Keyword check for popular categories
+    if (/youtube|netflix|twitch|spotify|vimeo|tiktok|movies|cinema|cinesubz|yts|1337x/.test(combined)) {
+      tags.add('entertainment'); tags.add('media'); tags.add('streaming');
+    }
+    if (/github|stackoverflow|codepen|dev\.to|npm|docs\.|api\./.test(combined)) {
+      tags.add('development'); tags.add('dev'); tags.add('code');
+    }
+    if (/news|cnn|bbc|reuters|techcrunch|verge|wired|nytimes/.test(combined)) {
+      tags.add('news'); tags.add('media');
+    }
+    if (/twitter|x\.com|reddit|linkedin|facebook|instagram/.test(combined)) {
+      tags.add('social'); tags.add('social-media');
+    }
+    if (/amazon|ebay|etsy|shopify|aliexpress|shop|store/.test(combined)) {
+      tags.add('shopping'); tags.add('ecommerce');
+    }
+    if (/chatgpt|openai|gemini|claude|midjourney|huggingface|gpt|krea|fal/.test(combined)) {
+      tags.add('ai'); tags.add('artificial-intelligence'); tags.add('tools');
+    }
+    if (/google|drive|notion|trello|slack|figma|canva|accounting/.test(combined)) {
+      tags.add('productivity'); tags.add('tools');
+    }
+    if (/telegram|whatsapp|messenger|viber|wechat|signal|line|skype|teams/.test(combined)) {
+      tags.add('messaging'); tags.add('chat'); tags.add('communication');
+    }
+    if (/mail|gmail|zoho|proton|tuta/.test(combined)) {
+      tags.add('email'); tags.add('communication'); tags.add('mail');
+    }
+    if (/college|university|school|education|learning|course|qualification|cim|cambridge/.test(combined)) {
+      tags.add('learning'); tags.add('education');
+    }
+    if (/visa|government|gov\./.test(combined)) {
+      tags.add('government');
+    }
+    if (/ca sri lanka|finance|bank|invest|stripe/.test(combined)) {
+      tags.add('finance'); tags.add('money');
+    }
+
+    // 2. Add domain brand name
+    try {
+      const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+      const brand = host.split('.')[0];
+      if (brand && brand.length >= 3 && !['com','org','net','edu','gov'].includes(brand)) {
+        tags.add(brand);
+      }
+    } catch {}
+
+    // 3. Add clean words from title
+    const titleWords = (title || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, ' ')
+      .split(/[\s-]+/)
+      .filter(w => w.length >= 4 && !STOP_WORDS.has(w));
+    for (const w of titleWords) {
+      if (tags.size >= 15) break;
+      tags.add(w);
+    }
+
+    return Array.from(tags).slice(0, 15);
+  }
+
+  const SYNONYM_MAP = {
+    'social': ['social-media', 'twitter', 'instagram', 'facebook', 'linkedin', 'reddit', 'x.com'],
+    'chat': ['messaging', 'communication', 'whatsapp', 'telegram', 'messenger', 'slack', 'discord', 'viber', 'wechat', 'signal', 'line'],
+    'messaging': ['chat', 'communication', 'whatsapp', 'telegram', 'messenger', 'slack', 'discord', 'viber', 'wechat', 'signal', 'line'],
+    'communication': ['chat', 'messaging', 'email', 'gmail', 'mail', 'whatsapp', 'telegram', 'slack', 'discord'],
+    'email': ['gmail', 'mail', 'proton', 'outlook', 'zoho', 'communication'],
+    'mail': ['gmail', 'email', 'proton', 'outlook', 'zoho', 'communication'],
+    'video': ['youtube', 'netflix', 'twitch', 'streaming', 'zoom', 'meetings', 'entertainment'],
+    'streaming': ['youtube', 'netflix', 'twitch', 'video', 'entertainment'],
+    'movie': ['youtube', 'netflix', 'video', 'streaming', 'entertainment', 'cinema'],
+    'code': ['development', 'dev', 'programming', 'github', 'stackoverflow', 'coder', 'replit', 'codepen'],
+    'dev': ['development', 'code', 'programming', 'github', 'stackoverflow', 'replit', 'codepen'],
+    'development': ['dev', 'code', 'programming', 'github', 'stackoverflow', 'replit', 'codepen'],
+    'programming': ['dev', 'code', 'development', 'github', 'stackoverflow'],
+    'ai': ['artificial-intelligence', 'chatgpt', 'openai', 'gemini', 'claude', 'copilot', 'llm', 'midjourney', 'huggingface'],
+    'artificial-intelligence': ['ai', 'chatgpt', 'openai', 'gemini', 'claude', 'llm'],
+    'search': ['google', 'bing', 'duckduckgo', 'engine', 'find'],
+    'shop': ['shopping', 'ecommerce', 'store', 'amazon', 'ebay', 'shopify', 'aliexpress'],
+    'shopping': ['shop', 'ecommerce', 'store', 'amazon', 'ebay', 'shopify', 'aliexpress'],
+    'notes': ['notion', 'productivity', 'document', 'google-docs'],
+    'docs': ['google-docs', 'documents', 'notion', 'productivity']
+  };
+
+  function getLevenshteinDistance(a, b) {
+    if (a.length === 0) return b.length;
+    if (b.length === 0) return a.length;
+    const matrix = [];
+    for (let i = 0; i <= b.length; i++) {
+      matrix[i] = [i];
+    }
+    for (let j = 0; j <= a.length; j++) {
+      matrix[0][j] = j;
+    }
+    for (let i = 1; i <= b.length; i++) {
+      for (let j = 1; j <= a.length; j++) {
+        if (b.charAt(i - 1) === a.charAt(j - 1)) {
+          matrix[i][j] = matrix[i - 1][j - 1];
+        } else {
+          matrix[i][j] = Math.min(
+            matrix[i - 1][j - 1] + 1, // substitution
+            matrix[i][j - 1] + 1,     // insertion
+            matrix[i - 1][j] + 1      // deletion
+          );
+        }
+      }
+    }
+    return matrix[b.length][a.length];
+  }
+
+  function isBookmarkMatch(query, searchString, targetWords) {
+    const cleanQuery = query.toLowerCase().trim();
+    const tokens = cleanQuery.split(/\s+/).filter(t => t.length > 0);
+    if (tokens.length === 0) return false;
+
+    // Check if the entire query has a synonym (e.g. "artificial intelligence" -> "artificial-intelligence")
+    const normalizedQuery = tokens.join('-');
+    if (SYNONYM_MAP[normalizedQuery]) {
+      const synonyms = SYNONYM_MAP[normalizedQuery];
+      const allConcepts = [normalizedQuery, ...synonyms];
+      const matchPhrase = allConcepts.some(c => {
+        const cleanConcept = c.replace(/-/g, ' ');
+        if (searchString.includes(c) || searchString.includes(cleanConcept)) return true;
+        return targetWords.includes(c);
+      });
+      if (matchPhrase) return true;
+    }
+
+    // Default: token-by-token matching (AND search)
+    return tokens.every(token => {
+      const synonyms = SYNONYM_MAP[token] || [];
+      const allTokens = [token, ...synonyms];
+
+      return allTokens.some(t => {
+        if (searchString.includes(t)) return true;
+        if (t.length >= 4) {
+          return targetWords.some(word => {
+            if (word.length >= 4) {
+              const maxEdits = t.length >= 6 ? 2 : 1;
+              return getLevenshteinDistance(t, word) <= maxEdits;
+            }
+            return false;
+          });
+        }
+        return false;
+      });
+    });
+  }
+
+  function renderDetails(title, url, tags) {
+    return `
+      <span class="search-result-title">${escapeHtml(title || url)}</span>
+      <span class="search-result-url">${escapeHtml(url)}</span>
+      <span class="search-result-path"></span>
+    `;
+  }
+
+  function groupAndSortBookmarks(bookmarks, queryTokens, bookmarkTags, searchClicks) {
+    const scores = {};
+    bookmarks.forEach(bm => {
+      let score = 0;
+      const title = (bm.title || '').toLowerCase();
+      const url = (bm.url || '').toLowerCase();
+      let tags = bookmarkTags[bm.id];
+      if (!tags || tags.length === 0) {
+        tags = getFallbackTags(bm.title, bm.url);
+      }
+
+      // Title matches
+      queryTokens.forEach(token => {
+        if (title === token) score += 15;
+        else if (title.includes(token)) score += 8;
+      });
+
+      // URL matches
+      queryTokens.forEach(token => {
+        if (url.includes(token)) score += 4;
+      });
+
+      // Tag matches
+      queryTokens.forEach(token => {
+        const synonyms = SYNONYM_MAP[token] || [];
+        const allTokens = [token, ...synonyms];
+        allTokens.forEach(t => {
+          if (tags.includes(t)) score += 2;
+        });
+      });
+
+      // Recency Boost
+      if (bm.dateAdded) {
+        const ageInDays = (Date.now() - bm.dateAdded) / (1000 * 60 * 60 * 24);
+        if (ageInDays < 7) score += 3;
+        else if (ageInDays < 30) score += 1.5;
+      }
+
+      // Click Frequency Boost
+      const clickCount = searchClicks[bm.id] || 0;
+      score += clickCount * 5;
+
+      scores[bm.id] = score;
+    });
+
+    // Group bookmarks by domain
+    const groupMap = {};
+    const groupList = [];
+    bookmarks.forEach(bm => {
+      let domain = 'Other';
+      try {
+        domain = new URL(bm.url).hostname.replace(/^www\./, '');
+      } catch {}
+      const score = scores[bm.id] || 0;
+      if (!groupMap[domain]) {
+        groupMap[domain] = { domain, items: [], maxScore: score };
+        groupList.push(groupMap[domain]);
+      }
+      groupMap[domain].items.push(bm);
+      if (score > groupMap[domain].maxScore) {
+        groupMap[domain].maxScore = score;
+      }
+    });
+
+    // Sort groups by their maximum score
+    groupList.sort((a, b) => b.maxScore - a.maxScore);
+
+    // Within each group, sort bookmarks by score
+    groupList.forEach(g => {
+      g.items.sort((a, b) => scores[b.id] - scores[a.id]);
+    });
+
+    // Slice total displayed to 30 items
+    let totalDisplayed = 0;
+    const groupsToDisplay = [];
+    for (const g of groupList) {
+      const displayedItems = [];
+      for (const item of g.items) {
+        displayedItems.push(item);
+        totalDisplayed++;
+        if (totalDisplayed >= 30) break;
+      }
+      if (displayedItems.length > 0) {
+        groupsToDisplay.push({ domain: g.domain, items: displayedItems });
+      }
+      if (totalDisplayed >= 30) break;
+    }
+
+    return groupsToDisplay;
+  }
+
+  function renderSearchResults(groupsToDisplay, bookmarkTags) {
+    searchResults.innerHTML = '';
+
+    // Hint bar
+    const hint = document.createElement('div');
+    hint.className = 'search-results-hint';
+    hint.textContent = 'Ctrl + Click to open in background tab';
+    searchResults.appendChild(hint);
+
+    groupsToDisplay.forEach(group => {
+      // Domain Header
+      const domainHeader = document.createElement('div');
+      domainHeader.className = 'search-domain-header';
+      domainHeader.style.cssText = `
+        font-size: 8.5px;
+        font-weight: 800;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        padding: 7px 10px 3px 10px;
+        background: #f9fafb;
+        border-bottom: 1.5px solid #f0f0f0;
+        border-top: 1px solid #f0f0f0;
+        letter-spacing: 0.03em;
+      `;
+      domainHeader.textContent = group.domain;
+      searchResults.appendChild(domainHeader);
+
+      group.items.forEach(bm => {
         const item = document.createElement('div');
         item.className = 'search-result-item';
-        const host = (() => { try { return new URL(bm.url).hostname; } catch { return ''; } })();
+        let tags = bookmarkTags[bm.id];
+        if (!tags || tags.length === 0) {
+          tags = getFallbackTags(bm.title, bm.url);
+        }
         item.innerHTML = `
           <img class="search-result-favicon" src="${getFaviconUrl(bm.url, 16)}" onerror="this.src='${FALLBACK_FAVICON}'" alt="">
           <div class="search-result-details">
-            <span class="search-result-title">${escapeHtml(bm.title || bm.url)}</span>
-            <span class="search-result-url">${escapeHtml(bm.url)}</span>
-            <span class="search-result-path"></span>
+            ${renderDetails(bm.title, bm.url, tags)}
           </div>
           <span class="search-result-opened" aria-hidden="true">Opened!</span>`;
 
@@ -427,13 +947,19 @@ document.addEventListener('DOMContentLoaded', () => {
           if (item.classList.contains('editing')) return;
           isHovered = false;
           clearTimeout(hoverTimer);
+
+          // Record search click popularity
+          chrome.storage.local.get({ searchClicks: {} }, (data) => {
+            const clicks = data.searchClicks || {};
+            clicks[bm.id] = (clicks[bm.id] || 0) + 1;
+            chrome.storage.local.set({ searchClicks: clicks });
+          });
+
           if (e.ctrlKey || e.metaKey) {
-            // Ctrl+Click (or Cmd+Click on Mac): open in background, popup stays open
             chrome.tabs.create({ url: bm.url, active: false });
             item.classList.add('opened');
             setTimeout(() => item.classList.remove('opened'), 1200);
           } else {
-            // Normal click: open tab and let popup close naturally
             chrome.tabs.create({ url: bm.url, active: true });
           }
         });
@@ -474,22 +1000,14 @@ document.addEventListener('DOMContentLoaded', () => {
               bm.url = updatedNode.url;
 
               item.classList.remove('editing');
-              detailsEl.innerHTML = `
-                <span class="search-result-title">${escapeHtml(bm.title || bm.url)}</span>
-                <span class="search-result-url">${escapeHtml(bm.url)}</span>
-                <span class="search-result-path"></span>
-              `;
+              detailsEl.innerHTML = renderDetails(bm.title, bm.url, tags);
               showStatus('Bookmark updated!', 'success');
             });
           };
 
           const cancelEdit = () => {
             item.classList.remove('editing');
-            detailsEl.innerHTML = `
-              <span class="search-result-title">${escapeHtml(oldTitle)}</span>
-              <span class="search-result-url">${escapeHtml(oldUrl)}</span>
-              <span class="search-result-path"></span>
-            `;
+            detailsEl.innerHTML = renderDetails(oldTitle, oldUrl, tags);
           };
 
           const handleKey = (ev) => {
@@ -511,7 +1029,9 @@ document.addEventListener('DOMContentLoaded', () => {
           document.addEventListener('mousedown', clickAwayHandler);
         };
 
-        // Idea 8: Right-Click Custom Context Menu
+        item.startInlineEdit = startInlineEdit;
+
+        // Custom Context Menu
         item.addEventListener('contextmenu', (e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -607,6 +1127,95 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         searchResults.appendChild(item);
+      });
+    });
+  }
+
+  function doSearch(query) {
+    if (!query) {
+      searchResults.innerHTML = `<div class="no-logs">
+        <svg viewBox="0 0 24 24" width="28" height="28" stroke="currentColor" stroke-width="2" fill="none"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <p>Search your bookmarks</p><span>Type above to find any saved page.</span>
+      </div>`;
+      return;
+    }
+
+    chrome.storage.local.get({ bookmarkTags: {}, searchClicks: {}, initialAnalysisDone: false }, (storageData) => {
+      const bookmarkTags = storageData.bookmarkTags || {};
+      const searchClicks = storageData.searchClicks || {};
+      const initialAnalysisDone = storageData.initialAnalysisDone;
+
+      getAllBookmarks((allBookmarks) => {
+        const queryTokens = query.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+        if (queryTokens.length === 0) {
+          searchResults.innerHTML = `<div class="no-logs"><p>No results for "${escapeHtml(query)}"</p></div>`;
+          return;
+        }
+
+        const newlyGeneratedTags = {};
+
+        // Perform fast initial analysis if not done yet
+        if (!initialAnalysisDone) {
+          allBookmarks.forEach(bm => {
+            if (bm.url && (!bookmarkTags[bm.id] || bookmarkTags[bm.id].length === 0)) {
+              const tags = getFallbackTags(bm.title, bm.url);
+              bookmarkTags[bm.id] = tags;
+              newlyGeneratedTags[bm.id] = tags;
+            }
+          });
+          chrome.storage.local.set({ initialAnalysisDone: true });
+          startBackgroundEnrichment(allBookmarks, bookmarkTags);
+        }
+
+        const seenUrls = new Set();
+        const bookmarks = [];
+        for (const bm of allBookmarks) {
+          if (bm.url) {
+            const normUrl = bm.url.trim().toLowerCase();
+            if (!seenUrls.has(normUrl)) {
+              let tags = bookmarkTags[bm.id];
+              if (!tags || tags.length === 0) {
+                tags = getFallbackTags(bm.title, bm.url);
+                bookmarkTags[bm.id] = tags;
+                newlyGeneratedTags[bm.id] = tags;
+
+                // Kick off background metadata scraping for this specific new bookmark
+                scrapeMetadataTags(bm.url, bm.title).then(scraped => {
+                  if (scraped && scraped.length > 0) {
+                    chrome.storage.local.get({ bookmarkTags: {} }, (data) => {
+                      const current = data.bookmarkTags || {};
+                      current[bm.id] = scraped;
+                      chrome.storage.local.set({ bookmarkTags: current });
+                    });
+                  }
+                });
+              }
+              const searchString = `${bm.title || ''} ${bm.url} ${tags.join(' ')}`.toLowerCase();
+              const targetWords = searchString.split(/[^a-z0-9]+/);
+              const isMatch = isBookmarkMatch(query, searchString, targetWords);
+              if (isMatch) {
+                seenUrls.add(normUrl);
+                bookmarks.push(bm);
+              }
+            }
+          }
+        }
+
+        // Save any newly generated tags to storage
+        if (Object.keys(newlyGeneratedTags).length > 0) {
+          chrome.storage.local.get({ bookmarkTags: {} }, (data) => {
+            const merged = Object.assign({}, data.bookmarkTags, newlyGeneratedTags);
+            chrome.storage.local.set({ bookmarkTags: merged });
+          });
+        }
+
+        if (bookmarks.length === 0) {
+          searchResults.innerHTML = `<div class="no-logs"><p>No results for "${escapeHtml(query)}"</p></div>`;
+          return;
+        }
+
+        const groupsToDisplay = groupAndSortBookmarks(bookmarks, queryTokens, bookmarkTags, searchClicks);
+        renderSearchResults(groupsToDisplay, bookmarkTags);
       });
     });
   }
@@ -892,9 +1501,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // #12 — JSON Export: full structured backup with folders, metadata, and timestamps
   document.getElementById('btnExportJson').addEventListener('click', () => {
-    chrome.storage.local.get({ savedTabGroups: [] }, (storageData) => {
+    chrome.storage.local.get({ savedTabGroups: [], bookmarkTags: {} }, (storageData) => {
       // For groups that still lack inline tabs, backfill from their bookmark folder first
       const groups = storageData.savedTabGroups;
+      const bookmarkTags = storageData.bookmarkTags || {};
       const needsBackfill = groups.filter(g => !g.tabs || g.tabs.length === 0);
       let pending = needsBackfill.length;
 
@@ -904,7 +1514,7 @@ document.addEventListener('DOMContentLoaded', () => {
             exportedAt: new Date().toISOString(),
             exportedBy: 'WeBook Extension',
             version: '2.0',
-            bookmarks: buildBookmarkJson(tree[0]),
+            bookmarks: buildBookmarkJson(tree[0], bookmarkTags),
             savedTabGroups: groups
           };
           const json = JSON.stringify(exportData, null, 2);
@@ -1023,17 +1633,45 @@ document.addEventListener('DOMContentLoaded', () => {
             (node.children || []).forEach(countNodes);
           }
           countNodes(root);
+
+          const newBookmarkTags = {};
+          let pendingOperations = 0;
+
+          function checkSaveTags() {
+            if (pendingOperations === 0 && Object.keys(newBookmarkTags).length > 0) {
+              chrome.storage.local.get({ bookmarkTags: {} }, (tagData) => {
+                const mergedTags = Object.assign({}, tagData.bookmarkTags, newBookmarkTags);
+                chrome.storage.local.set({ bookmarkTags: mergedTags, initialAnalysisDone: true }, () => {
+                  checkSearchIndexStatus();
+                });
+              });
+            }
+          }
+
           function importNode(node, parentId) {
             if (node.type === 'bookmark' || node.url) {
-              chrome.bookmarks.create({ parentId, title: node.title || node.url, url: node.url }, () => {
+              pendingOperations++;
+              chrome.bookmarks.create({ parentId, title: node.title || node.url, url: node.url }, (newBookmark) => {
                 imported++;
                 statusEl.textContent = `Importing bookmarks… ${imported}/${total}`;
+                
+                if (newBookmark && node.tags && Array.isArray(node.tags) && node.tags.length > 0) {
+                  newBookmarkTags[newBookmark.id] = node.tags.slice(0, 15); // limit to 15 tags
+                }
+
+                pendingOperations--;
+                checkSaveTags();
               });
             } else {
               // Skip the root "WeBook Tab Groups" folder — we handle that separately
               if (node.title === 'WeBook Tab Groups') return;
+              pendingOperations++;
               chrome.bookmarks.create({ parentId, title: node.title || 'Folder' }, (folder) => {
-                (node.children || []).forEach(child => importNode(child, folder.id));
+                if (folder) {
+                  (node.children || []).forEach(child => importNode(child, folder.id));
+                }
+                pendingOperations--;
+                checkSaveTags();
               });
             }
           }
@@ -1088,14 +1726,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
 
-  function buildBookmarkJson(node) {
+  function buildBookmarkJson(node, bookmarkTags = {}) {
     if (node.url) {
       return {
         type: 'bookmark',
         id: node.id,
         title: node.title || '',
         url: node.url,
-        dateAdded: node.dateAdded ? new Date(node.dateAdded).toISOString() : null
+        dateAdded: node.dateAdded ? new Date(node.dateAdded).toISOString() : null,
+        tags: bookmarkTags[node.id] || []
       };
     }
     return {
@@ -1103,7 +1742,7 @@ document.addEventListener('DOMContentLoaded', () => {
       id: node.id,
       title: node.title || 'Untitled Folder',
       dateAdded: node.dateAdded ? new Date(node.dateAdded).toISOString() : null,
-      children: (node.children || []).map(buildBookmarkJson)
+      children: (node.children || []).map(c => buildBookmarkJson(c, bookmarkTags))
     };
   }
 
@@ -1287,6 +1926,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateButtonLocks();
         bulkStatusText.textContent = details || 'Done! Library organized.';
         progressBar.style.width = '100%';
+        chrome.storage.local.set({ initialAnalysisDone: true });
         loadLogs();
       } else if (status === 'error') {
         updateButtonLocks();
