@@ -1311,6 +1311,8 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('exportAccordionCard').classList.toggle('open');
   });
 
+  let editingGroupIndex = null;
+
   // Load open tabs into checkbox list
   function loadGroupsTab() {
     const list = document.getElementById('tgTabsList');
@@ -1325,9 +1327,8 @@ document.addEventListener('DOMContentLoaded', () => {
       real.forEach(tab => {
         const row = document.createElement('label');
         row.className = 'tg-tab-row';
-        const host = (() => { try { return new URL(tab.url).hostname; } catch { return ''; } })();
         row.innerHTML = `
-          <input type="checkbox" class="tg-tab-check" data-tabid="${tab.id}" checked>
+          <input type="checkbox" class="tg-tab-check" data-tabid="${tab.id}" data-title="${escapeHtml(tab.title || tab.url)}" data-url="${escapeHtml(tab.url)}" checked>
           <img class="tg-tab-favicon" src="${getFaviconUrl(tab.url, 14)}" onerror="this.src='${FALLBACK_FAVICON}'" alt="">
           <span class="tg-tab-title">${escapeHtml(tab.title || tab.url)}</span>`;
         list.appendChild(row);
@@ -1338,76 +1339,259 @@ document.addEventListener('DOMContentLoaded', () => {
     loadSavedGroups();
   }
 
-  // Select All / Deselect All toggle
-  let tgAllSelected = true;
-  document.getElementById('tgSelectAll').addEventListener('click', () => {
-    tgAllSelected = !tgAllSelected;
-    document.querySelectorAll('.tg-tab-check').forEach(cb => cb.checked = tgAllSelected);
-    document.getElementById('tgSelectAll').textContent = tgAllSelected ? 'Select All' : 'Deselect All';
-  });
+  function cancelGroupEdit() {
+    editingGroupIndex = null;
+    
+    const accordionTitle = document.querySelector('#tgCreateCard .tg-accordion-title');
+    if (accordionTitle) {
+      accordionTitle.innerHTML = `
+        <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2.5" fill="none"><path d="M12 5v14M5 12h14"/></svg>
+        Create Tab Group`;
+    }
 
-  // Create Group button
+    const nameInput = document.getElementById('tgGroupName');
+    if (nameInput) {
+      nameInput.value = '';
+    }
+
+    tgSelectedColor = 'blue';
+    document.querySelectorAll('.tg-swatch').forEach(sw => {
+      sw.classList.toggle('selected', sw.dataset.color === 'blue');
+    });
+
+    const btnCreate = document.getElementById('btnCreateGroup');
+    if (btnCreate) {
+      btnCreate.innerHTML = `
+        <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        <span>Create Tab Group</span>`;
+      btnCreate.classList.remove('btn-success');
+      btnCreate.classList.add('btn-primary');
+    }
+
+    const btnCancel = document.getElementById('btnCancelGroupEdit');
+    if (btnCancel) btnCancel.remove();
+
+    loadGroupsTab();
+  }
+
+  function startEditGroup(g, idx) {
+    editingGroupIndex = idx;
+    
+    const card = document.getElementById('tgCreateCard');
+    if (card) {
+      card.classList.add('open');
+    }
+
+    const accordionTitle = document.querySelector('#tgCreateCard .tg-accordion-title');
+    if (accordionTitle) {
+      accordionTitle.innerHTML = `
+        <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2.5" fill="none"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4Z"/></svg>
+        Edit Tab Group`;
+    }
+
+    const nameInput = document.getElementById('tgGroupName');
+    if (nameInput) {
+      nameInput.value = g.name;
+    }
+
+    tgSelectedColor = g.color || 'blue';
+    document.querySelectorAll('.tg-swatch').forEach(sw => {
+      sw.classList.toggle('selected', sw.dataset.color === tgSelectedColor);
+    });
+
+    const btnCreate = document.getElementById('btnCreateGroup');
+    if (btnCreate) {
+      btnCreate.innerHTML = `
+        <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+        <span>Save Group</span>`;
+      btnCreate.classList.remove('btn-primary');
+      btnCreate.classList.add('btn-success');
+    }
+
+    if (!document.getElementById('btnCancelGroupEdit')) {
+      const btnCancel = document.createElement('button');
+      btnCancel.id = 'btnCancelGroupEdit';
+      btnCancel.type = 'button';
+      btnCancel.className = 'btn btn-secondary';
+      btnCancel.style.cssText = 'flex: 1; margin: 0;';
+      btnCancel.innerHTML = '<span>Cancel</span>';
+      btnCancel.addEventListener('click', cancelGroupEdit);
+      btnCreate.parentNode.appendChild(btnCancel);
+    }
+
+    const list = document.getElementById('tgTabsList');
+    list.innerHTML = '<div style="font-size:9px;color:var(--text-muted);padding:4px 0;">Loading tabs…</div>';
+
+    chrome.tabs.query({ currentWindow: true }, (openTabs) => {
+      const realOpenTabs = openTabs.filter(t => t.url && !t.url.startsWith('chrome://') && !t.url.startsWith('chrome-extension://'));
+      const groupTabs = g.tabs || [];
+      
+      list.innerHTML = '';
+      const renderedUrls = new Set();
+
+      groupTabs.forEach(gt => {
+        const matchingOpen = realOpenTabs.find(ot => ot.url === gt.url);
+        const row = document.createElement('label');
+        row.className = 'tg-tab-row';
+        row.style.fontWeight = 'bold';
+        
+        const tabId = matchingOpen ? matchingOpen.id : '';
+        const titleStr = gt.title || gt.url;
+        
+        row.innerHTML = `
+          <input type="checkbox" class="tg-tab-check" data-tabid="${tabId}" data-title="${escapeHtml(titleStr)}" data-url="${escapeHtml(gt.url)}" checked>
+          <img class="tg-tab-favicon" src="${getFaviconUrl(gt.url, 14)}" onerror="this.src='${FALLBACK_FAVICON}'" alt="">
+          <span class="tg-tab-title" style="color: var(--text-dark);">${escapeHtml(titleStr)} ${matchingOpen ? '' : '<span style="font-size:7.5px;color:var(--text-muted);font-style:italic;">(saved)</span>'}</span>`;
+        list.appendChild(row);
+        renderedUrls.add(gt.url);
+      });
+
+      realOpenTabs.forEach(ot => {
+        if (renderedUrls.has(ot.url)) return;
+
+        const row = document.createElement('label');
+        row.className = 'tg-tab-row';
+        row.innerHTML = `
+          <input type="checkbox" class="tg-tab-check" data-tabid="${ot.id}" data-title="${escapeHtml(ot.title || ot.url)}" data-url="${escapeHtml(ot.url)}">
+          <img class="tg-tab-favicon" src="${getFaviconUrl(ot.url, 14)}" onerror="this.src='${FALLBACK_FAVICON}'" alt="">
+          <span class="tg-tab-title" style="color: var(--text-muted);">${escapeHtml(ot.title || ot.url)}</span>`;
+        list.appendChild(row);
+      });
+      
+      if (list.children.length === 0) {
+        list.innerHTML = '<div style="font-size:9px;color:var(--text-muted);padding:4px 0;">No tabs found.</div>';
+      }
+    });
+  }
+
+  // Create or Save Group button
   document.getElementById('btnCreateGroup').addEventListener('click', () => {
     const nameInput = document.getElementById('tgGroupName');
     const groupName = nameInput.value.trim() || `WeBook — ${new Date().toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`;
     const checkedBoxes = [...document.querySelectorAll('.tg-tab-check:checked')];
-    const tabIds = checkedBoxes.map(cb => parseInt(cb.dataset.tabid));
 
-    if (tabIds.length === 0) {
+    if (checkedBoxes.length === 0) {
       showStatus('Select at least one tab!', 'error');
       return;
     }
 
-    // First, resolve all tab objects so we have title + url inline
-    let resolvedTabs = [];
-    let fetched = 0;
-    tabIds.forEach(tabId => {
-      chrome.tabs.get(tabId, (tab) => {
-        if (tab) resolvedTabs.push({ title: tab.title || tab.url, url: tab.url });
-        fetched++;
-        if (fetched === tabIds.length) doCreateGroup(resolvedTabs);
-      });
-    });
+    const resolvedTabs = checkedBoxes.map(cb => ({
+      title: cb.dataset.title || cb.dataset.url,
+      url: cb.dataset.url
+    }));
+    
+    const tabIds = checkedBoxes
+      .filter(cb => cb.dataset.tabid)
+      .map(cb => parseInt(cb.dataset.tabid));
 
-    function doCreateGroup(resolvedTabs) {
-      // Group them as a Chrome tab group
-      chrome.tabs.group({ tabIds }, (groupId) => {
-        chrome.tabGroups.update(groupId, { title: groupName, color: tgSelectedColor }, () => {
-          getRealFolderId('2', (rootId) => {
-            // Save to bookmark folder under "WeBook Tab Groups" (scoped to selected rootId)
-            findTabGroupsFolder(rootId, (parentFolder) => {
-                const createFolder = (parentId) => {
-                  chrome.bookmarks.create({ parentId, title: groupName }, (folder) => {
-                    // Bookmark each tab in the folder
-                    resolvedTabs.forEach(t => chrome.bookmarks.create({ parentId: folder.id, title: t.title, url: t.url }));
-                    // Save metadata including inline tabs array
-                    chrome.storage.local.get({ savedTabGroups: [] }, (data) => {
-                      const entry = {
-                        id: folder.id,
-                        name: groupName,
-                        color: tgSelectedColor,
-                        savedAt: Date.now(),
-                        tabs: resolvedTabs          // ← inline tab data
-                      };
-                      data.savedTabGroups.unshift(entry);
-                      chrome.storage.local.set({ savedTabGroups: data.savedTabGroups }, () => {
-                        showStatus(`Group "${groupName}" created!`, 'success');
-                        nameInput.value = '';
-                        loadSavedGroups();
+    if (editingGroupIndex !== null) {
+      chrome.storage.local.get({ savedTabGroups: [] }, (storageData) => {
+        const groupsList = storageData.savedTabGroups;
+        const g = groupsList[editingGroupIndex];
+        if (g) {
+          g.name = groupName;
+          g.color = tgSelectedColor;
+          g.tabs = resolvedTabs;
+
+          const folderId = g.id;
+          if (folderId) {
+            chrome.bookmarks.update(folderId, { title: groupName }, () => {
+              if (!chrome.runtime.lastError) {
+                chrome.bookmarks.getChildren(folderId, (children) => {
+                  if (!chrome.runtime.lastError && children) {
+                    let deletedCount = 0;
+                    if (children.length === 0) {
+                      recreateBookmarks(folderId, groupsList);
+                    } else {
+                      children.forEach(c => {
+                        chrome.bookmarks.remove(c.id, () => {
+                          deletedCount++;
+                          if (deletedCount === children.length) {
+                            recreateBookmarks(folderId, groupsList);
+                          }
+                        });
                       });
-                    });
-                  });
-                };
-                if (parentFolder) {
-                  createFolder(parentFolder.id);
-                } else {
-                  chrome.bookmarks.create({ parentId: rootId, title: 'WeBook Tab Groups' }, (pf) => createFolder(pf.id));
-                }
-              });
+                    }
+                  } else {
+                    saveUpdatedGroupsList(groupsList);
+                  }
+                });
+              } else {
+                saveUpdatedGroupsList(groupsList);
+              }
             });
+          } else {
+            saveUpdatedGroupsList(groupsList);
+          }
+        }
+      });
+
+      function recreateBookmarks(folderId, groupsList) {
+        if (resolvedTabs.length === 0) {
+          saveUpdatedGroupsList(groupsList);
+          return;
+        }
+        let created = 0;
+        resolvedTabs.forEach(t => {
+          chrome.bookmarks.create({ parentId: folderId, title: t.title, url: t.url }, () => {
+            created++;
+            if (created === resolvedTabs.length) {
+              saveUpdatedGroupsList(groupsList);
+            }
           });
         });
       }
+
+      function saveUpdatedGroupsList(groupsList) {
+        chrome.storage.local.set({ savedTabGroups: groupsList }, () => {
+          showStatus(`Group "${groupName}" updated!`, 'success');
+          cancelGroupEdit();
+        });
+      }
+
+    } else {
+      const runCreate = () => {
+        getRealFolderId('2', (rootId) => {
+          findTabGroupsFolder(rootId, (parentFolder) => {
+            const createFolder = (parentId) => {
+              chrome.bookmarks.create({ parentId, title: groupName }, (folder) => {
+                resolvedTabs.forEach(t => chrome.bookmarks.create({ parentId: folder.id, title: t.title, url: t.url }));
+                chrome.storage.local.get({ savedTabGroups: [] }, (data) => {
+                  const entry = {
+                    id: folder.id,
+                    name: groupName,
+                    color: tgSelectedColor,
+                    savedAt: Date.now(),
+                    tabs: resolvedTabs
+                  };
+                  data.savedTabGroups.unshift(entry);
+                  chrome.storage.local.set({ savedTabGroups: data.savedTabGroups }, () => {
+                    showStatus(`Group "${groupName}" created!`, 'success');
+                    nameInput.value = '';
+                    loadGroupsTab();
+                  });
+                });
+              });
+            };
+            if (parentFolder) {
+              createFolder(parentFolder.id);
+            } else {
+              chrome.bookmarks.create({ parentId: rootId, title: 'WeBook Tab Groups' }, (pf) => createFolder(pf.id));
+            }
+          });
+        });
+      };
+
+      if (tabIds.length > 0) {
+        chrome.tabs.group({ tabIds }, (groupId) => {
+          chrome.tabGroups.update(groupId, { title: groupName, color: tgSelectedColor }, () => {
+            runCreate();
+          });
+        });
+      } else {
+        runCreate();
+      }
+    }
   });
 
   // Load saved groups list
@@ -1475,21 +1659,29 @@ document.addEventListener('DOMContentLoaded', () => {
       tabsPane.style.cssText = 'display:none; flex-direction:column; border-top:1px solid #e5e7eb;';
 
       // Load tabs from bookmark folder — fall back to inline g.tabs if folder missing/empty
-      chrome.bookmarks.getChildren(g.id, (children) => {
+      if (g.id) {
+        chrome.bookmarks.getChildren(g.id, (children) => {
+          const fallbackTabs = g.tabs || [];
+          const liveTabs = !chrome.runtime.lastError && children && children.length > 0
+            ? children.filter(c => c.url).map(c => ({ title: c.title, url: c.url }))
+            : null;
+          if (liveTabs && liveTabs.length > 0) {
+            renderTabsInPane(tabsPane, liveTabs);
+          } else if (fallbackTabs.length > 0) {
+            renderTabsInPane(tabsPane, fallbackTabs);
+          } else {
+            tabsPane.innerHTML = '<div style="font-size:8px;color:var(--text-muted);padding:4px 8px;">'
+              + (chrome.runtime.lastError ? '⚠ Bookmark folder deleted — re-export to recover tabs.' : 'No tabs saved.') + '</div>';
+          }
+        });
+      } else {
         const fallbackTabs = g.tabs || [];
-        // Use getChildren result if valid and non-empty
-        const liveTabs = !chrome.runtime.lastError && children && children.length > 0
-          ? children.filter(c => c.url).map(c => ({ title: c.title, url: c.url }))
-          : null;
-        if (liveTabs && liveTabs.length > 0) {
-          renderTabsInPane(tabsPane, liveTabs);
-        } else if (fallbackTabs.length > 0) {
+        if (fallbackTabs.length > 0) {
           renderTabsInPane(tabsPane, fallbackTabs);
         } else {
-          tabsPane.innerHTML = '<div style="font-size:8px;color:var(--text-muted);padding:4px 8px;">'
-            + (chrome.runtime.lastError ? '⚠ Bookmark folder deleted — re-export to recover tabs.' : 'No tabs saved.') + '</div>';
+          tabsPane.innerHTML = '<div style="font-size:8px;color:var(--text-muted);padding:4px 8px;">No tabs saved.</div>';
         }
-      });
+      }
 
       wrapper.appendChild(row);
       wrapper.appendChild(tabsPane);
@@ -1525,19 +1717,93 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (tabs) {
           restore(tabs.map(t => t.url));
-        } else {
+        } else if (g.id) {
           chrome.bookmarks.getChildren(g.id, (children) => {
             if (chrome.runtime.lastError || !children || children.length === 0) {
               showStatus('Folder empty or deleted.', 'error'); return;
             }
             restore(children.filter(c => c.url).map(c => c.url));
           });
+        } else {
+          showStatus('No tabs saved in this group.', 'error');
         }
       });
 
       // ── Dot click also restores (visual affordance) ──
       row.querySelector('.tg-saved-dot').addEventListener('click', (e) => {
         row.querySelector('.tg-saved-info').click();
+      });
+
+      // ── Right click on group row opens edit context menu ──
+      row.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const existingMenu = document.getElementById('custom-context-menu');
+        if (existingMenu) existingMenu.remove();
+
+        const menu = document.createElement('div');
+        menu.id = 'custom-context-menu';
+        
+        let top = e.clientY;
+        let left = e.clientX;
+        if (left + 120 > window.innerWidth) left = window.innerWidth - 125;
+        if (top + 100 > window.innerHeight) top = window.innerHeight - 105;
+
+        menu.style.cssText = `
+          position: fixed;
+          top: ${top}px;
+          left: ${left}px;
+          background: #fff;
+          border: 2px solid var(--border-dark);
+          box-shadow: 2px 2px 0 var(--border-dark);
+          z-index: 10000;
+          display: flex;
+          flex-direction: column;
+          padding: 2px;
+        `;
+
+        const createOption = (text, onClick) => {
+          const opt = document.createElement('button');
+          opt.style.cssText = `
+            background: none;
+            border: none;
+            padding: 4px 8px;
+            text-align: left;
+            font-family: inherit;
+            font-size: 8.5px;
+            font-weight: 800;
+            text-transform: uppercase;
+            cursor: pointer;
+            width: 100%;
+            border-radius: 0;
+          `;
+          opt.textContent = text;
+          opt.addEventListener('mouseover', () => opt.style.backgroundColor = 'var(--accent-lime)');
+          opt.addEventListener('mouseout', () => opt.style.backgroundColor = 'transparent');
+          opt.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            onClick();
+            menu.remove();
+          });
+          return opt;
+        };
+
+        menu.appendChild(createOption('Edit Group', () => {
+          startEditGroup(g, idx);
+        }));
+
+        document.body.appendChild(menu);
+
+        const closeMenu = () => {
+          menu.remove();
+          document.removeEventListener('click', closeMenu);
+          document.removeEventListener('contextmenu', closeMenu);
+        };
+        setTimeout(() => {
+          document.addEventListener('click', closeMenu);
+          document.addEventListener('contextmenu', closeMenu);
+        }, 10);
       });
 
 
@@ -1668,24 +1934,46 @@ document.addEventListener('DOMContentLoaded', () => {
             const freshGroups = [];
             let completed = 0;
 
-            importedGroups.forEach(g => {
-              const tabs = g.tabs || [];
-              if (tabs.length === 0) {
+            const handleGroupDone = () => {
+              completed++;
+              if (completed === importedGroups.length) {
+                saveGroups(freshGroups, importedGroups.length, data, statusEl);
+              }
+            };
+
+            if (chrome.runtime.lastError || !parentFolder) {
+              console.error('[WeBook] Failed to create WeBook Tab Groups parent folder:', chrome.runtime.lastError);
+              importedGroups.forEach(g => {
+                const tabs = (g.tabs || []).filter(t => t && typeof t === 'object' && t.url);
                 freshGroups.push({ ...g, tabs });
-                completed++;
-                if (completed === importedGroups.length) saveGroups(freshGroups, importedGroups.length, data, statusEl);
+              });
+              saveGroups(freshGroups, importedGroups.length, data, statusEl);
+              return;
+            }
+
+            importedGroups.forEach(g => {
+              const tabs = (g.tabs || []).filter(t => t && typeof t === 'object' && t.url);
+              if (tabs.length === 0) {
+                freshGroups.push({ ...g, tabs: [] });
+                handleGroupDone();
                 return;
               }
 
               chrome.bookmarks.create({ parentId: parentFolder.id, title: g.name }, (folder) => {
+                if (chrome.runtime.lastError || !folder) {
+                  console.error('[WeBook] Failed to create bookmark folder for group:', g.name, chrome.runtime.lastError);
+                  freshGroups.push({ ...g, tabs });
+                  handleGroupDone();
+                  return;
+                }
+
                 let tabsDone = 0;
                 tabs.forEach(t => {
-                  chrome.bookmarks.create({ parentId: folder.id, title: t.title || t.url, url: t.url }, () => {
+                  chrome.bookmarks.create({ parentId: folder.id, title: t.title || t.url || 'Tab', url: t.url }, () => {
                     tabsDone++;
                     if (tabsDone === tabs.length) {
                       freshGroups.push({ id: folder.id, name: g.name, color: g.color, savedAt: g.savedAt, tabs });
-                      completed++;
-                      if (completed === importedGroups.length) saveGroups(freshGroups, importedGroups.length, data, statusEl);
+                      handleGroupDone();
                     }
                   });
                 });
@@ -1709,7 +1997,7 @@ document.addEventListener('DOMContentLoaded', () => {
             let pendingOperations = 0;
 
             function checkSaveTags() {
-              if (pendingOperations === 0 && Object.keys(newBookmarkTags).length > 0) {
+              if (pendingOperations === 0) {
                 chrome.storage.local.get({ bookmarkTags: {} }, (tagData) => {
                   const mergedTags = Object.assign({}, tagData.bookmarkTags, newBookmarkTags);
                   chrome.storage.local.set({ bookmarkTags: mergedTags, initialAnalysisDone: true }, () => {
@@ -1755,6 +2043,10 @@ document.addEventListener('DOMContentLoaded', () => {
               } else {
                 importNode(child, rootId);
               }
+            });
+          } else {
+            chrome.storage.local.set({ initialAnalysisDone: true }, () => {
+              checkSearchIndexStatus();
             });
           }
         };

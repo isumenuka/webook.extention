@@ -192,14 +192,20 @@ Just bookmark any page in Chrome — WeBook auto-organizes it in the background 
 
 ## 🔄 Changelog
 
+### v9.1.1
+- ✅ **Group Editor Integration** — Added right-click context menu on saved groups to edit them directly inside the expanded "Create Tab Group" panel. Users can rename, change color, check open tabs to add, or uncheck to delete tabs in a unified UI with automatic bookmark folder synchronization.
+- ✅ **Version bumped to 9.1.1**
+
 ### v9.1.0
 - ✅ **Background Search Indexing** — Moved the search index analysis loop to the background service worker. Indexing processes bookmarks batch-by-batch persistently in the background even if the extension popup is closed, resuming automatically on worker reloads.
 - ✅ **Clean Backup Imports** — Implemented a full browser bookmark tree and storage cache wipe preceding JSON backup imports to prevent duplicate entries and ensure a clean overwrite.
+- ✅ **Robust Backup Imports** — Resolved an issue where importing a JSON backup with custom tab groups would fail to load in the groups tab due to synchronous type validator errors in Chrome's Bookmarks API. Added automated fallbacks for legacy/empty groups.
 - ✅ **AI-Powered Semantic Search ("Ask AI")** — Integrated a natural language search query feature (using the "Ask AI" button) enabling conceptual matches for complex questions like "any markdown file reader in windows".
 - ✅ **UI Styling & Overflow Fix** — Styled the Ask AI button with WeBook's lime green branding and fixed button flex overrides to resolve search bar layout overflow issues.
 - ✅ **Tag Synchronization** — Prevented redundant webpage scraping and API calls by skipping search indexing for already-tagged bookmarks and preserving existing tags during folder organization.
 - ✅ **Higher Payload Support** — Configured a route-specific Express JSON body parser for /api/semantic-search with a 2mb limit to resolve HTTP 413 errors.
 - ✅ **Version bumped to 9.1.0**
+
 
 ### v9.0.0
 - ✅ **Resumable Background Tasks** — Implemented auto-resume capabilities for Bulk Organizer and Broken Link Checker. Task states (pending queues, success/error counts, processed items) are stored persistently in local storage and automatically resumed on browser startup or extension updates.
