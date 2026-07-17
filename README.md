@@ -1,6 +1,6 @@
 # <img src="icon.png" width="32" height="32" align="center"> WeBook — Smart Bookmark Manager
 
-> **v9.0.0** · Chrome Extension · AI-Powered Bookmark Organizer with Tab Groups
+> **v9.1.0** · Chrome Extension · AI-Powered Bookmark Organizer with Tab Groups
 
 [![Chrome Web Store](https://img.shields.io/badge/Chrome_Web_Store-Add_to_Chrome-black?style=for-the-badge&logo=googlechrome&logoColor=a3e635)](https://chromewebstore.google.com/detail/webook/ggikgoohejhgihbfkehpmacbmlhnmljp)
 
@@ -191,6 +191,15 @@ Just bookmark any page in Chrome — WeBook auto-organizes it in the background 
 ---
 
 ## 🔄 Changelog
+
+### v9.1.0
+- ✅ **Background Search Indexing** — Moved the search index analysis loop to the background service worker. Indexing processes bookmarks batch-by-batch persistently in the background even if the extension popup is closed, resuming automatically on worker reloads.
+- ✅ **Clean Backup Imports** — Implemented a full browser bookmark tree and storage cache wipe preceding JSON backup imports to prevent duplicate entries and ensure a clean overwrite.
+- ✅ **AI-Powered Semantic Search ("Ask AI")** — Integrated a natural language search query feature (using the "Ask AI" button) enabling conceptual matches for complex questions like "any markdown file reader in windows".
+- ✅ **UI Styling & Overflow Fix** — Styled the Ask AI button with WeBook's lime green branding and fixed button flex overrides to resolve search bar layout overflow issues.
+- ✅ **Tag Synchronization** — Prevented redundant webpage scraping and API calls by skipping search indexing for already-tagged bookmarks and preserving existing tags during folder organization.
+- ✅ **Higher Payload Support** — Configured a route-specific Express JSON body parser for /api/semantic-search with a 2mb limit to resolve HTTP 413 errors.
+- ✅ **Version bumped to 9.1.0**
 
 ### v9.0.0
 - ✅ **Resumable Background Tasks** — Implemented auto-resume capabilities for Bulk Organizer and Broken Link Checker. Task states (pending queues, success/error counts, processed items) are stored persistently in local storage and automatically resumed on browser startup or extension updates.

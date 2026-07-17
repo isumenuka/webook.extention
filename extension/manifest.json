@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "WeBook",
-  "version": "9.0.0",
+  "version": "9.1.0",
   "description": "Automatically organizes bookmarks into smart folders.",
   "permissions": [
     "bookmarks",

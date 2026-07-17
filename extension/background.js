@@ -52,29 +52,29 @@ function getRealFolderId(settingsValue) {
   });
 }
 
-function enrichTags(existingTags, title, url, folderName) {
-  // Words that are too generic, vague, or meaningless as tags
-  const STOP_WORDS = new Set([
-    'with','your','from','this','that','and','the','for','its','are','was',
-    'not','can','all','has','have','will','just','into','more','also','but',
-    'web','internet','online','website','site','page','pages','portal','domain',
-    'url','http','https','www','html','link','links','browse','browsing',
-    'new','best','top','free','open','fast','easy','full','live','real','main',
-    'home','show','view','list','get','now','try','use','make','need','find',
-    'let','our','you','how','why','what','when','where','who','more','most',
-    'app','apps','tool','tools','service','services','product','products','item',
-    'platform','solution','solutions','system','systems','resource','resources',
-    'hub','info','data','base','index','detail','details','dashboard','portal',
-    'addon','addons','extension','extensions','chrome','store','edge','microsoft',
-    'bookmark','bookmarks','saved','general','uncategorized','utility','utilities',
-    'launches','launch','launched','release','released','update','updates','updated',
-    'intern','internal','invisible','common','standard','simple','basic','official',
-    'about','contact','terms','privacy','policy','blog','news','post','posts',
-    'sign','login','signup','register','account','settings','profile','search',
-    'welcome','overview','intro','introduction','guide',
-    'tech','reference','browsing','service',
-  ]);
+// Words that are too generic, vague, or meaningless as tags
+const STOP_WORDS = new Set([
+  'with','your','from','this','that','and','the','for','its','are','was',
+  'not','can','all','has','have','will','just','into','more','also','but',
+  'web','internet','online','website','site','page','pages','portal','domain',
+  'url','http','https','www','html','link','links','browse','browsing',
+  'new','best','top','free','open','fast','easy','full','live','real','main',
+  'home','show','view','list','get','now','try','use','make','need','find',
+  'let','our','you','how','why','what','when','where','who','more','most',
+  'app','apps','tool','tools','service','services','product','products','item',
+  'platform','solution','solutions','system','systems','resource','resources',
+  'hub','info','data','base','index','detail','details','dashboard','portal',
+  'addon','addons','extension','extensions','chrome','store','edge','microsoft',
+  'bookmark','bookmarks','saved','general','uncategorized','utility','utilities',
+  'launches','launch','launched','release','released','update','updates','updated',
+  'intern','internal','invisible','common','standard','simple','basic','official',
+  'about','contact','terms','privacy','policy','blog','news','post','posts',
+  'sign','login','signup','register','account','settings','profile','search',
+  'welcome','overview','intro','introduction','guide',
+  'tech','reference','browsing','service',
+]);
 
+function enrichTags(existingTags, title, url, folderName) {
   const enriched = new Set();
 
   // 1. AI-generated tags (most specific — keep up to 15)
@@ -121,8 +121,198 @@ function enrichTags(existingTags, title, url, folderName) {
   return Array.from(enriched).slice(0, 15);
 }
 
+function getFallbackTags(title, url) {
+  const combined = `${title || ''} ${url || ''}`.toLowerCase();
+  const tags = new Set();
+  
+  // 1. Keyword check for popular categories
+  if (/youtube|netflix|twitch|spotify|vimeo|tiktok|movies|cinema|cinesubz|yts|1337x/.test(combined)) {
+    tags.add('entertainment'); tags.add('media'); tags.add('streaming');
+  }
+  if (/github|stackoverflow|codepen|dev\.to|npm|docs\.|api\./.test(combined)) {
+    tags.add('development'); tags.add('dev'); tags.add('code');
+  }
+  if (/news|cnn|bbc|reuters|techcrunch|verge|wired|nytimes/.test(combined)) {
+    tags.add('news'); tags.add('media');
+  }
+  if (/twitter|x\.com|reddit|linkedin|facebook|instagram/.test(combined)) {
+    tags.add('social'); tags.add('social-media');
+  }
+  if (/amazon|ebay|etsy|shopify|aliexpress|shop|store/.test(combined)) {
+    tags.add('shopping'); tags.add('ecommerce');
+  }
+  if (/chatgpt|openai|gemini|claude|midjourney|huggingface|gpt|krea|fal/.test(combined)) {
+    tags.add('ai'); tags.add('artificial-intelligence'); tags.add('tools');
+  }
+  if (/google|drive|notion|trello|slack|figma|canva|accounting/.test(combined)) {
+    tags.add('productivity'); tags.add('tools');
+  }
+  if (/telegram|whatsapp|messenger|viber|wechat|signal|line|skype|teams/.test(combined)) {
+    tags.add('messaging'); tags.add('chat'); tags.add('communication');
+  }
+  if (/mail|gmail|zoho|proton|tuta/.test(combined)) {
+    tags.add('email'); tags.add('communication'); tags.add('mail');
+  }
+  if (/college|university|school|education|learning|course|qualification|cim|cambridge/.test(combined)) {
+    tags.add('learning'); tags.add('education');
+  }
+  if (/visa|government|gov\./.test(combined)) {
+    tags.add('government');
+  }
+  if (/ca sri lanka|finance|bank|invest|stripe/.test(combined)) {
+    tags.add('finance'); tags.add('money');
+  }
+
+  // 2. Add domain brand name
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    const brand = host.split('.')[0];
+    if (brand && brand.length >= 3 && !['com','org','net','edu','gov'].includes(brand)) {
+      tags.add(brand);
+    }
+  } catch {}
+
+  // 3. Add clean words from title
+  const titleWords = (title || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .split(/[\s-]+/)
+    .filter(w => w.length >= 4 && !STOP_WORDS.has(w));
+  for (const w of titleWords) {
+    if (tags.size >= 15) break;
+    tags.add(w);
+  }
+
+  return Array.from(tags).slice(0, 15);
+}
+
+async function scrapeMetadataTags(url, title) {
+  const tags = new Set();
+  const licenseKey = await new Promise(r => chrome.storage.local.get({ licenseKey: '' }, data => r(data.licenseKey || '')));
+  
+  try {
+    const res = await fetch(`${PROXY_URL}/api/scrape-metadata`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-license-key': licenseKey
+      },
+      body: JSON.stringify({ url })
+    });
+    
+    if (res.ok) {
+      const data = await res.json();
+      
+      if (data.title) {
+        const titleWords = data.title.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/);
+        titleWords.forEach(w => {
+          if (w.length >= 4 && !STOP_WORDS.has(w)) tags.add(w);
+        });
+      }
+      
+      if (data.description) {
+        const descWords = data.description.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/);
+        descWords.forEach(w => {
+          if (w.length >= 4 && !STOP_WORDS.has(w)) tags.add(w);
+        });
+      }
+    }
+  } catch (e) {
+    console.warn('[WeBook Scraper] Scrape failed for:', url, e.message);
+  }
+
+  const fallback = getFallbackTags(title, url);
+  fallback.forEach(t => tags.add(t));
+
+  return Array.from(tags).slice(0, 15);
+}
+
+async function startSearchIndexing() {
+  chrome.storage.local.get({ bookmarkTags: {} }, async (storageData) => {
+    try {
+      updateSearchIndexStatus({ status: 'processing', current: 0, total: 100, progress: 0, details: 'Scanning bookmarks...' });
+      
+      const tree = await chrome.bookmarks.getTree();
+      const allBookmarks = [];
+      function scan(node) {
+        if (node.url) {
+          allBookmarks.push(node);
+        }
+        if (node.children) {
+          node.children.forEach(scan);
+        }
+      }
+      tree.forEach(scan);
+
+      const bookmarkTags = storageData.bookmarkTags || {};
+      
+      // Only include bookmarks that don't already have tags in bookmarkTags
+      const queue = allBookmarks.filter(bm => !bookmarkTags[bm.id] || bookmarkTags[bm.id].length === 0);
+      const total = queue.length;
+
+      if (total === 0) {
+        updateSearchIndexStatus({ status: 'completed', current: 0, total: 0, progress: 100, details: 'Search index is up to date!' });
+        chrome.storage.local.set({ initialAnalysisDone: true });
+        return;
+      }
+
+      isSearchIndexCancelled = false;
+      let processed = 0;
+      const batchSize = 3;
+
+      for (let i = 0; i < queue.length; i += batchSize) {
+        if (isSearchIndexCancelled) {
+          console.log('[WeBook] Search indexing cancelled by user.');
+          break;
+        }
+
+        const batch = queue.slice(i, i + batchSize);
+        updateSearchIndexStatus({
+          status: 'processing',
+          current: processed,
+          total,
+          progress: Math.round((processed / total) * 100),
+          details: `Indexing: ${batch.map(b => b.title || b.url).join(', ')}`
+        });
+
+        const promises = batch.map(async (bm) => {
+          try {
+            const tags = await scrapeMetadataTags(bm.url, bm.title);
+            if (tags && tags.length > 0) {
+              bookmarkTags[bm.id] = tags;
+            }
+          } catch (e) {
+            console.error('[WeBook] Error indexing bookmark:', bm.url, e);
+          }
+        });
+
+        await Promise.all(promises);
+        processed += batch.length;
+
+        // Save progress incrementally
+        await new Promise(r => chrome.storage.local.set({ bookmarkTags }, r));
+
+        // Wait a short delay to avoid overwhelming the network
+        await new Promise(r => setTimeout(r, 200));
+      }
+
+      if (isSearchIndexCancelled) {
+        updateSearchIndexStatus({ status: 'completed', current: processed, total, progress: 100, details: 'Cancelled' });
+      } else {
+        updateSearchIndexStatus({ status: 'completed', current: total, total, progress: 100, details: 'Done! Search index prepared.' });
+        chrome.storage.local.set({ initialAnalysisDone: true });
+      }
+
+    } catch (err) {
+      console.error('[WeBook] Search index failed:', err);
+      updateSearchIndexStatus({ status: 'error', details: err.message });
+    }
+  });
+}
+
 let isBulkOrganizeCancelled = false;
 let isLinkCheckCancelled = false;
+let isSearchIndexCancelled = false;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // #11 — RETRY HELPER: Retries on network error or 502/503/429 with backoff + 28s per-attempt timeout
@@ -872,6 +1062,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     isBulkOrganizeCancelled = true;
   } else if (message.action === 'cancel_link_check') {
     isLinkCheckCancelled = true;
+  } else if (message.action === 'start_search_index') {
+    startSearchIndexing();
+  } else if (message.action === 'cancel_search_index') {
+    isSearchIndexCancelled = true;
   }
 });
 
@@ -985,8 +1179,10 @@ async function processSingleBookmark(bookmark, settings) {
   // Feature 5: Store tags
   if (tags.length > 0) {
     chrome.storage.local.get({ bookmarkTags: {} }, (data) => {
-      data.bookmarkTags[bookmark.id] = tags;
-      chrome.storage.local.set({ bookmarkTags: data.bookmarkTags });
+      if (!data.bookmarkTags[bookmark.id] || data.bookmarkTags[bookmark.id].length === 0) {
+        data.bookmarkTags[bookmark.id] = tags;
+        chrome.storage.local.set({ bookmarkTags: data.bookmarkTags });
+      }
     });
   }
 
@@ -1083,6 +1279,13 @@ function updateBulkStatus(statusData) {
 function updateLinkCheckStatus(statusData) {
   chrome.storage.local.set({ linkCheckStatus: statusData });
   chrome.runtime.sendMessage({ action: 'link_check_progress', data: statusData }, () => {
+    const err = chrome.runtime.lastError;
+  });
+}
+
+function updateSearchIndexStatus(statusData) {
+  chrome.storage.local.set({ searchIndexStatus: statusData });
+  chrome.runtime.sendMessage({ action: 'search_index_progress', data: statusData }, () => {
     const err = chrome.runtime.lastError;
   });
 }
@@ -1428,6 +1631,7 @@ async function organizeAllExistingBookmarks() {
       const total = needsWork.length;
       if (total === 0) {
         updateBulkStatus({ status: 'completed', current: 0, total: 0, progress: 100, details: 'All bookmarks are already organized!' });
+        chrome.storage.local.set({ initialAnalysisDone: true });
         if (settings.showNotifications) {
           chrome.notifications.create('bulk-organize-noop', {
             type: 'basic', iconUrl: 'icon.png', title: 'WeBook Bulk Organize',
@@ -1505,6 +1709,7 @@ async function organizeAllExistingBookmarks() {
 
         updateBulkStatus({ status: 'completed', current: total, total, progress: 100 });
         chrome.storage.local.remove('bulkOrganizeState');
+        chrome.storage.local.set({ initialAnalysisDone: true });
 
         if (settings.showNotifications) {
           let messageText = `Successfully organized ${successCount} of ${total} bookmarks.`;
@@ -1536,7 +1741,7 @@ async function organizeAllExistingBookmarks() {
 // FEATURE: RESUMABLE TASKS (CRASH/CLOSURE RECOVERY)
 // ─────────────────────────────────────────────────────────────────────────────
 async function resumeInterruptedTasks() {
-  chrome.storage.local.get(['bulkOrganizeState', 'linkCheckState'], async (data) => {
+  chrome.storage.local.get(['bulkOrganizeState', 'linkCheckState', 'searchIndexStatus'], async (data) => {
     if (data.bulkOrganizeState && data.bulkOrganizeState.status === 'processing') {
       console.log('[WeBook] Resuming interrupted bulk organization task...');
       resumeBulkOrganize(data.bulkOrganizeState);
@@ -1544,6 +1749,10 @@ async function resumeInterruptedTasks() {
     if (data.linkCheckState && data.linkCheckState.status === 'scanning') {
       console.log('[WeBook] Resuming interrupted link checker task...');
       resumeLinkCheck(data.linkCheckState);
+    }
+    if (data.searchIndexStatus && data.searchIndexStatus.status === 'processing') {
+      console.log('[WeBook] Resuming interrupted search indexing task...');
+      startSearchIndexing();
     }
   });
 }

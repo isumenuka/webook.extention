@@ -69,13 +69,32 @@ document.addEventListener('DOMContentLoaded', () => {
   const analysisProgressCount = document.getElementById('analysisProgressCount');
 
   function checkSearchIndexStatus() {
-    chrome.storage.local.get({ initialAnalysisDone: false }, (data) => {
+    chrome.storage.local.get({ initialAnalysisDone: false, searchIndexStatus: null }, (data) => {
       if (data.initialAnalysisDone) {
         analysisPromptContainer.classList.add('hidden');
         searchControls.classList.remove('hidden');
       } else {
         analysisPromptContainer.classList.remove('hidden');
         searchControls.classList.add('hidden');
+        
+        if (data.searchIndexStatus) {
+          const { current, total, progress, status, details } = data.searchIndexStatus;
+          if (status === 'processing') {
+            btnStartAnalysis.disabled = true;
+            btnStartAnalysis.innerHTML = '<span>Analyzing...</span>';
+            analysisProgress.classList.remove('hidden');
+            analysisProgressBar.style.width = `${progress}%`;
+            analysisProgressCount.textContent = `${current}/${total}`;
+          } else {
+            btnStartAnalysis.disabled = false;
+            btnStartAnalysis.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2.5" fill="none"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg><span>Analyze Bookmarks</span>';
+            analysisProgress.classList.add('hidden');
+          }
+        } else {
+          btnStartAnalysis.disabled = false;
+          btnStartAnalysis.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2.5" fill="none"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg><span>Analyze Bookmarks</span>';
+          analysisProgress.classList.add('hidden');
+        }
       }
     });
   }
@@ -84,70 +103,9 @@ document.addEventListener('DOMContentLoaded', () => {
     btnStartAnalysis.disabled = true;
     btnStartAnalysis.innerHTML = '<span>Analyzing...</span>';
     analysisProgress.classList.remove('hidden');
-
-    getAllBookmarks((allBookmarks) => {
-      const total = allBookmarks.filter(b => b.url).length;
-      if (total === 0) {
-        chrome.storage.local.set({ initialAnalysisDone: true }, () => {
-          checkSearchIndexStatus();
-        });
-        return;
-      }
-
-      let processed = 0;
-      chrome.storage.local.get({ bookmarkTags: {} }, (storageData) => {
-        const bookmarkTags = storageData.bookmarkTags || {};
-        
-        allBookmarks.forEach(bm => {
-          if (bm.url && (!bookmarkTags[bm.id] || bookmarkTags[bm.id].length === 0)) {
-            bookmarkTags[bm.id] = getFallbackTags(bm.title, bm.url);
-          }
-        });
-
-        analysisProgressCount.textContent = `0/${total}`;
-        analysisProgressBar.style.width = '0%';
-
-        chrome.storage.local.set({ bookmarkTags }, () => {
-          const queue = allBookmarks.filter(bm => bm.url);
-          let index = 0;
-          const batchSize = 3;
-
-          async function processNextBatch() {
-            if (index >= queue.length) {
-              chrome.storage.local.set({ initialAnalysisDone: true }, () => {
-                checkSearchIndexStatus();
-              });
-              return;
-            }
-
-            const batch = queue.slice(index, index + batchSize);
-            index += batchSize;
-
-            const promises = batch.map(async (bm) => {
-              try {
-                const tags = await scrapeMetadataTags(bm.url, bm.title);
-                if (tags && tags.length > 0) {
-                  bookmarkTags[bm.id] = tags;
-                }
-              } catch (e) {}
-            });
-
-            await Promise.all(promises);
-            processed = Math.min(total, processed + batch.length);
-
-            chrome.storage.local.set({ bookmarkTags });
-
-            const pct = Math.round((processed / total) * 100);
-            analysisProgressBar.style.width = `${pct}%`;
-            analysisProgressCount.textContent = `${processed}/${total}`;
-
-            setTimeout(processNextBatch, 200);
-          }
-
-          processNextBatch();
-        });
-      });
-    });
+    analysisProgressBar.style.width = '0%';
+    analysisProgressCount.textContent = '0/...';
+    chrome.runtime.sendMessage({ action: 'start_search_index' });
   });
 
   // Scoped helper to resolve the real root folder ID based on browser environment
@@ -492,12 +450,119 @@ document.addEventListener('DOMContentLoaded', () => {
   // ──────────────────────────────────────────────────
   const searchInput   = document.getElementById('searchInput');
   const searchResults = document.getElementById('searchResults');
+  const btnAiSearch   = document.getElementById('btnAiSearch');
   let searchTimer;
 
   searchInput.addEventListener('input', () => {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => doSearch(searchInput.value.trim()), 200);
   });
+
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      clearTimeout(searchTimer);
+      doAiSearch(searchInput.value.trim());
+    }
+  });
+
+  btnAiSearch.addEventListener('click', () => {
+    doAiSearch(searchInput.value.trim());
+  });
+
+  async function doAiSearch(query) {
+    if (!query) {
+      searchResults.innerHTML = `<div class="no-logs">
+        <svg viewBox="0 0 24 24" width="28" height="28" stroke="currentColor" stroke-width="2" fill="none"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <p>Ask AI a question</p><span>Type a question above and click "Ask AI" or press Enter.</span>
+      </div>`;
+      return;
+    }
+
+    // Show AI loading state
+    searchResults.innerHTML = `<div class="no-logs">
+      <div class="spinner"></div>
+      <p>AI is searching your bookmarks...</p>
+      <span>Evaluating semantic relevance for "${escapeHtml(query)}"...</span>
+    </div>`;
+
+    btnAiSearch.disabled = true;
+    btnAiSearch.innerHTML = '<span>Searching...</span>';
+
+    try {
+      const licenseData = await new Promise(r => chrome.storage.local.get({ licenseKey: '' }, r));
+      const licenseKey = licenseData.licenseKey || '';
+
+      getAllBookmarks(async (allBookmarks) => {
+        const bookmarksToSearch = allBookmarks.filter(bm => bm.url);
+        
+        chrome.storage.local.get({ bookmarkTags: {} }, async (tagData) => {
+          const bookmarkTags = tagData.bookmarkTags || {};
+          const searchClicks = tagData.searchClicks || {};
+          
+          const bookmarksPayload = bookmarksToSearch.slice(0, 1000).map(bm => ({
+            id: bm.id,
+            title: bm.title || '',
+            url: bm.url || '',
+            tags: bookmarkTags[bm.id] || []
+          }));
+
+          try {
+            const res = await fetch(`${PROXY_URL}/api/semantic-search`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-license-key': licenseKey
+              },
+              body: JSON.stringify({
+                query,
+                bookmarks: bookmarksPayload
+              })
+            });
+
+            if (!res.ok) {
+              const errData = await res.json().catch(() => ({}));
+              throw new Error(errData.error || `HTTP ${res.status}`);
+            }
+
+            const data = await res.json();
+            const matchedIds = new Set(data.results || []);
+
+            const results = bookmarksToSearch.filter(bm => matchedIds.has(bm.id));
+
+            if (results.length === 0) {
+              searchResults.innerHTML = `<div class="no-logs">
+                <svg viewBox="0 0 24 24" width="28" height="28" stroke="currentColor" stroke-width="2" fill="none"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <p>No matches found</p>
+                <span>AI couldn't find any relevant bookmarks for "${escapeHtml(query)}".</span>
+              </div>`;
+              return;
+            }
+
+            const queryTokens = query.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+            const groupsToDisplay = groupAndSortBookmarks(results, queryTokens, bookmarkTags, searchClicks);
+            renderSearchResults(groupsToDisplay, bookmarkTags);
+
+          } catch (e) {
+            searchResults.innerHTML = `<div class="no-logs">
+              <p style="color: var(--error);">AI Search Failed</p>
+              <span>Error: ${escapeHtml(e.message)}</span>
+            </div>`;
+          } finally {
+            btnAiSearch.disabled = false;
+            btnAiSearch.innerHTML = `<svg viewBox="0 0 24 24" width="9" height="9" stroke="currentColor" stroke-width="2.5" fill="none"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><span>Ask AI</span>`;
+          }
+        });
+      });
+
+    } catch (err) {
+      searchResults.innerHTML = `<div class="no-logs">
+        <p style="color: var(--error);">AI Search Failed</p>
+        <span>Error: ${escapeHtml(err.message)}</span>
+      </div>`;
+      btnAiSearch.disabled = false;
+      btnAiSearch.innerHTML = `<svg viewBox="0 0 24 24" width="9" height="9" stroke="currentColor" stroke-width="2.5" fill="none"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><span>Ask AI</span>`;
+    }
+  }
 
   // Helper to build the bookmark path recursively
   function getBookmarkPath(nodeId, callback, pathParts = []) {
@@ -1561,50 +1626,67 @@ document.addEventListener('DOMContentLoaded', () => {
     reader.onload = (ev) => {
       try {
         const data = JSON.parse(ev.target.result);
+        statusEl.textContent = 'Clearing existing bookmarks…';
 
-        // ── Step 1: Clean wipe of existing WeBook Tab Groups bookmark folder ──
-        const doImport = () => {
-          getRealFolderId('2', (rootId) => {
-              const importedGroups = Array.isArray(data.savedTabGroups) ? data.savedTabGroups : [];
+        function clearAllExistingBookmarks(callback) {
+          chrome.bookmarks.getTree((tree) => {
+            const rootNodes = tree[0]?.children || [];
+            let pendingDeletions = 0;
+            
+            function checkDone() {
+              if (pendingDeletions === 0) {
+                callback();
+              }
+            }
 
-              // ── Step 2: Clear savedTabGroups from storage ──
-              chrome.storage.local.set({ savedTabGroups: [] }, () => {
+            rootNodes.forEach(rootNode => {
+              const children = rootNode.children || [];
+              children.forEach(child => {
+                pendingDeletions++;
+                chrome.bookmarks.removeTree(child.id, () => {
+                  const err = chrome.runtime.lastError;
+                  pendingDeletions--;
+                  checkDone();
+                });
+              });
+            });
 
-                if (importedGroups.length === 0) {
-                  finishBookmarkImport(data, statusEl, 0);
-                  return;
-                }
+            if (pendingDeletions === 0) {
+              callback();
+            }
+          });
+        }
 
-                // ── Step 3: Create fresh bookmark folders for all groups ──
-                chrome.bookmarks.create({ parentId: rootId, title: 'WeBook Tab Groups' }, (parentFolder) => {
-                  const freshGroups = [];
-                  let completed = 0;
+        const doImportTabGroups = (rootId) => {
+          const importedGroups = Array.isArray(data.savedTabGroups) ? data.savedTabGroups : [];
+          if (importedGroups.length === 0) {
+            finishBookmarkImport(data, statusEl, 0);
+            return;
+          }
 
-                importedGroups.forEach(g => {
-                  const tabs = g.tabs || [];
+          chrome.bookmarks.create({ parentId: rootId, title: 'WeBook Tab Groups' }, (parentFolder) => {
+            const freshGroups = [];
+            let completed = 0;
 
-                  if (tabs.length === 0) {
-                    // No tab data — import as placeholder
-                    freshGroups.push({ ...g, tabs });
-                    completed++;
-                    if (completed === importedGroups.length) saveGroups(freshGroups, importedGroups.length, data, statusEl);
-                    return;
-                  }
+            importedGroups.forEach(g => {
+              const tabs = g.tabs || [];
+              if (tabs.length === 0) {
+                freshGroups.push({ ...g, tabs });
+                completed++;
+                if (completed === importedGroups.length) saveGroups(freshGroups, importedGroups.length, data, statusEl);
+                return;
+              }
 
-                  chrome.bookmarks.create({ parentId: parentFolder.id, title: g.name }, (folder) => {
-                    // Create bookmark entries for each tab
-                    let tabsDone = 0;
-                    tabs.forEach(t => {
-                      chrome.bookmarks.create({ parentId: folder.id, title: t.title || t.url, url: t.url }, () => {
-                        tabsDone++;
-                        if (tabsDone === tabs.length) {
-                          // All tabs bookmarked — record fresh entry
-                          freshGroups.push({ id: folder.id, name: g.name, color: g.color, savedAt: g.savedAt, tabs });
-                          completed++;
-                          if (completed === importedGroups.length) saveGroups(freshGroups, importedGroups.length, data, statusEl);
-                        }
-                      });
-                    });
+              chrome.bookmarks.create({ parentId: parentFolder.id, title: g.name }, (folder) => {
+                let tabsDone = 0;
+                tabs.forEach(t => {
+                  chrome.bookmarks.create({ parentId: folder.id, title: t.title || t.url, url: t.url }, () => {
+                    tabsDone++;
+                    if (tabsDone === tabs.length) {
+                      freshGroups.push({ id: folder.id, name: g.name, color: g.color, savedAt: g.savedAt, tabs });
+                      completed++;
+                      if (completed === importedGroups.length) saveGroups(freshGroups, importedGroups.length, data, statusEl);
+                    }
                   });
                 });
               });
@@ -1612,85 +1694,81 @@ document.addEventListener('DOMContentLoaded', () => {
           });
         };
 
-        // Scope the cleanup of old tab groups folder tree inside Other Bookmarks ('2')
-        getRealFolderId('2', (rootId) => {
-          findTabGroupsFolder(rootId, (oldFolder) => {
-            if (oldFolder) {
-              chrome.bookmarks.removeTree(oldFolder.id, doImport);
-            } else {
-              doImport();
+        const doImportBookmarks = (rootId) => {
+          const root = data.bookmarks || null;
+          if (root && (root.children || root.url)) {
+            statusEl.textContent = 'Importing bookmarks…';
+            let imported = 0, total = 0;
+            function countNodes(node) {
+              if (node.url) { total++; return; }
+              (node.children || []).forEach(countNodes);
             }
-          });
-        });
+            countNodes(root);
 
-        // ── Step 4: Import bookmarks tree ──
-        const root = data.bookmarks || null;
-        if (root && (root.children || root.url)) {
-          statusEl.textContent = 'Importing bookmarks…';
-          let imported = 0, total = 0;
-          function countNodes(node) {
-            if (node.url) { total++; return; }
-            (node.children || []).forEach(countNodes);
-          }
-          countNodes(root);
+            const newBookmarkTags = {};
+            let pendingOperations = 0;
 
-          const newBookmarkTags = {};
-          let pendingOperations = 0;
-
-          function checkSaveTags() {
-            if (pendingOperations === 0 && Object.keys(newBookmarkTags).length > 0) {
-              chrome.storage.local.get({ bookmarkTags: {} }, (tagData) => {
-                const mergedTags = Object.assign({}, tagData.bookmarkTags, newBookmarkTags);
-                chrome.storage.local.set({ bookmarkTags: mergedTags, initialAnalysisDone: true }, () => {
-                  checkSearchIndexStatus();
+            function checkSaveTags() {
+              if (pendingOperations === 0 && Object.keys(newBookmarkTags).length > 0) {
+                chrome.storage.local.get({ bookmarkTags: {} }, (tagData) => {
+                  const mergedTags = Object.assign({}, tagData.bookmarkTags, newBookmarkTags);
+                  chrome.storage.local.set({ bookmarkTags: mergedTags, initialAnalysisDone: true }, () => {
+                    checkSearchIndexStatus();
+                  });
                 });
-              });
+              }
             }
-          }
 
-          function importNode(node, parentId) {
-            if (node.type === 'bookmark' || node.url) {
-              pendingOperations++;
-              chrome.bookmarks.create({ parentId, title: node.title || node.url, url: node.url }, (newBookmark) => {
-                imported++;
-                statusEl.textContent = `Importing bookmarks… ${imported}/${total}`;
-                
-                if (newBookmark && node.tags && Array.isArray(node.tags) && node.tags.length > 0) {
-                  newBookmarkTags[newBookmark.id] = node.tags.slice(0, 15); // limit to 15 tags
-                }
+            function importNode(node, parentId) {
+              if (node.type === 'bookmark' || node.url) {
+                pendingOperations++;
+                chrome.bookmarks.create({ parentId, title: node.title || node.url, url: node.url }, (newBookmark) => {
+                  imported++;
+                  statusEl.textContent = `Importing bookmarks… ${imported}/${total}`;
+                  
+                  if (newBookmark && node.tags && Array.isArray(node.tags) && node.tags.length > 0) {
+                    newBookmarkTags[newBookmark.id] = node.tags.slice(0, 15);
+                  }
 
-                pendingOperations--;
-                checkSaveTags();
-              });
-            } else {
-              // Skip the root "WeBook Tab Groups" folder — we handle that separately
-              if (node.title === 'WeBook Tab Groups') return;
-              pendingOperations++;
-              chrome.bookmarks.create({ parentId, title: node.title || 'Folder' }, (folder) => {
-                if (folder) {
-                  (node.children || []).forEach(child => importNode(child, folder.id));
-                }
-                pendingOperations--;
-                checkSaveTags();
-              });
+                  pendingOperations--;
+                  checkSaveTags();
+                });
+              } else {
+                if (node.title === 'WeBook Tab Groups') return;
+                pendingOperations++;
+                chrome.bookmarks.create({ parentId, title: node.title || 'Folder' }, (folder) => {
+                  if (folder) {
+                    (node.children || []).forEach(child => importNode(child, folder.id));
+                  }
+                  pendingOperations--;
+                  checkSaveTags();
+                });
+              }
             }
-          }
-          getRealFolderId('1', (rootId) => {
+
             (root.children || [root]).forEach(child => {
-                const titleLower = (child.title || '').toLowerCase().trim();
-                if (child.type === 'folder' && (titleLower === 'favorites bar' || titleLower === 'bookmarks bar' || titleLower === 'favorites' || titleLower === 'bookmarks')) {
-                  // Smart-merge backup Bookmarks/Favorites bar directly into browser's Favorites Bar root ('1')
-                  (child.children || []).forEach(grandchild => importNode(grandchild, '1'));
-                } else if (child.type === 'folder' && (titleLower === 'other favorites' || titleLower === 'other bookmarks')) {
-                  // Smart-merge backup Other favorites directly into browser's Other Bookmarks root ('2')
-                  (child.children || []).forEach(grandchild => importNode(grandchild, '2'));
-                } else {
-                  // Default: import normally into the selected rootId
-                  importNode(child, rootId);
-                }
+              const titleLower = (child.title || '').toLowerCase().trim();
+              if (child.type === 'folder' && (titleLower === 'favorites bar' || titleLower === 'bookmarks bar' || titleLower === 'favorites' || titleLower === 'bookmarks')) {
+                (child.children || []).forEach(grandchild => importNode(grandchild, '1'));
+              } else if (child.type === 'folder' && (titleLower === 'other favorites' || titleLower === 'other bookmarks')) {
+                (child.children || []).forEach(grandchild => importNode(grandchild, '2'));
+              } else {
+                importNode(child, rootId);
+              }
+            });
+          }
+        };
+
+        clearAllExistingBookmarks(() => {
+          chrome.storage.local.set({ savedTabGroups: [], bookmarkTags: {}, initialAnalysisDone: false }, () => {
+            getRealFolderId('2', (rootIdOther) => {
+              getRealFolderId('1', (rootIdBar) => {
+                doImportTabGroups(rootIdOther);
+                doImportBookmarks(rootIdBar);
               });
             });
-        }
+          });
+        });
 
       } catch (err) {
         statusEl.textContent = '❌ Invalid JSON file.';
@@ -1950,6 +2028,25 @@ document.addEventListener('DOMContentLoaded', () => {
         updateButtonLocks();
         linkStatusText.textContent = `Done — ${dead.length} dead link${dead.length !== 1 ? 's' : ''} found`;
         renderDeadLinks(dead);
+      }
+    }
+
+    // Search indexing progress
+    if (message.action === 'search_index_progress') {
+      const { current, total, progress, status, details } = message.data;
+      analysisProgressBar.style.width = `${progress}%`;
+      analysisProgressCount.textContent = `${current}/${total}`;
+      
+      if (status === 'processing') {
+        btnStartAnalysis.disabled = true;
+        btnStartAnalysis.innerHTML = '<span>Analyzing...</span>';
+        analysisProgress.classList.remove('hidden');
+      } else if (status === 'completed') {
+        checkSearchIndexStatus();
+      } else if (status === 'error') {
+        btnStartAnalysis.disabled = false;
+        btnStartAnalysis.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2.5" fill="none"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg><span>Analyze Bookmarks</span>';
+        alert(`Search Indexing failed: ${details || 'unknown error'}`);
       }
     }
 
